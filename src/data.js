@@ -34,6 +34,7 @@ export const ALL_MATCHES = Object.keys(GROUPS).flatMap(getGroupMatches)
 export const COMPLETED = {
   A1: { home: 2, away: 0 }, // Mexico 2–0 South Africa
   A2: { home: 2, away: 1 }, // South Korea 2–1 Czechia
+  B1: { home: 1, away: 1 }, // Canada 1-1 Bosnia
   // B1: TBD — Canada vs Bosnia (in progress, locked for max pts)
   // Add more here as tournament progresses, e.g.:
   // D1: { home: 2, away: 1 }, // USA 2–1 Paraguay
