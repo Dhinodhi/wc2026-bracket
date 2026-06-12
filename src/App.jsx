@@ -191,7 +191,7 @@ function MatchCard({ match, pick, onPick }) {
     }}>
       {/* MD label + badge row */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <span style={{ fontSize: 10, color: C.textDim, fontWeight: 800, letterSpacing: 1 }}>
+        <span style={{ fontSize: 10, color: C.green, fontWeight: 800, letterSpacing: 1 }}>
           MATCHDAY {match.md}
         </span>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
