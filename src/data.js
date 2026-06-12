@@ -29,6 +29,17 @@ export function getGroupMatches(group) {
 
 export const ALL_MATCHES = Object.keys(GROUPS).flatMap(getGroupMatches)
 
+// ── KNOWN RESULTS ──────────────────────────────────────────────────────────
+// Update this object as matches are played — scores auto-update the leaderboard
+export const COMPLETED = {
+  A1: { home: 2, away: 0 }, // Mexico 2–0 South Africa
+  A2: { home: 2, away: 1 }, // South Korea 2–1 Czechia
+  B1: { home: 1, away: 1 }, // Canada 1-1 Bosnia
+  // B1: TBD — Canada vs Bosnia (in progress, locked for max pts)
+  // Add more here as tournament progresses, e.g.:
+  // D1: { home: 2, away: 1 }, // USA 2–1 Paraguay
+}
+
 // Matches locked before picks opened — everyone gets max points automatically
 export const LOCKED_IDS = ['A1', 'A2', 'B1']
 
@@ -49,14 +60,13 @@ export function scoreGroupPick(pick, result) {
   return POINTS.GROUP_CORRECT + (exact ? POINTS.GROUP_EXACT_BONUS : 0)
 }
 
-// results is a map of { matchId: { home, away } } fetched from Supabase
-export function calcTotal(picks, results) {
+export function calcTotal(picks) {
   let total = 0
   ALL_MATCHES.forEach((m) => {
-    const result = results?.[m.id]
+    const result = COMPLETED[m.id]
     const pick = picks?.[m.id]
     if (LOCKED_IDS.includes(m.id)) {
-      // All locked matches — grant max points regardless
+      // All locked matches — grant max group points regardless of result
       total += POINTS.GROUP_CORRECT + POINTS.GROUP_EXACT_BONUS
     } else if (result && pick) {
       total += scoreGroupPick(pick, result)

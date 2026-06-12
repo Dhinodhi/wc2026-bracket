@@ -1,5 +1,5 @@
 import { jsPDF } from 'jspdf'
-import { GROUPS, getGroupMatches, LOCKED_IDS, POINTS, scoreGroupPick } from './data'
+import { GROUPS, getGroupMatches, LOCKED_IDS, COMPLETED, POINTS, scoreGroupPick } from './data'
 
 // ── COLOR HELPERS ──────────────────────────────────────────────────────────
 function hex(h) {
@@ -24,7 +24,7 @@ const WHITE    = [255,255,255]
 const AMBER    = hex('#ffb300')
 const RED      = hex('#ef5350')
 
-export function generateBracketPDF(playerName, picks, results) {
+export function generateBracketPDF(playerName, picks) {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' })
   const W = 612
   const H = 792
@@ -122,7 +122,7 @@ export function generateBracketPDF(playerName, picks, results) {
     matches.forEach((m, mi) => {
       const { id: mid, md, home, away } = m
       const locked = LOCKED_IDS.includes(mid)
-      const result = results?.[mid]
+      const result = COMPLETED[mid]
       const pick = picks?.[mid]
 
       const ry = CLY + COL_LBL_H + mi * MATCH_ROW_H

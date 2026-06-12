@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { supabase } from './supabase'
 import {
   GROUPS, getGroupMatches, ALL_MATCHES,
-  LOCKED_IDS, POINTS, scoreGroupPick, calcTotal
+  COMPLETED, LOCKED_IDS, POINTS, scoreGroupPick, calcTotal
 } from './data'
 import { generateBracketPDF } from './generatePDF'
 
@@ -28,23 +28,19 @@ const C = {
 
 const font = "'Inter', 'Segoe UI', sans-serif"
 
-// ── RESULTS CONTEXT ────────────────────────────────────────────────────────
-// Loaded once at app root, passed down as prop so all components share it
-async function fetchResults() {
-  const { data } = await supabase.from('results').select('match_id, home, away')
-  const map = {}
-  ;(data || []).forEach(r => { map[r.match_id] = { home: r.home, away: r.away } })
-  return map
-}
-
 // ── SMALL COMPONENTS ───────────────────────────────────────────────────────
 
 function Btn({ children, onClick, variant = 'primary', disabled, style = {} }) {
   const base = {
-    padding: '11px 20px', borderRadius: 8, border: 'none',
+    padding: '11px 20px',
+    borderRadius: 8,
+    border: 'none',
     cursor: disabled ? 'not-allowed' : 'pointer',
-    fontWeight: 700, fontSize: 14, fontFamily: font,
-    transition: 'opacity 0.15s', opacity: disabled ? 0.5 : 1,
+    fontWeight: 700,
+    fontSize: 14,
+    fontFamily: font,
+    transition: 'opacity 0.15s',
+    opacity: disabled ? 0.5 : 1,
     ...style,
   }
   const variants = {
@@ -72,7 +68,8 @@ function ScoreInput({ value, onChange, disabled }) {
         border: `1px solid ${disabled ? C.textDim : C.borderBlue}`,
         color: disabled ? C.textDim : C.text,
         borderRadius: 6, padding: '5px 0',
-        fontSize: 18, fontWeight: 700, fontFamily: font,
+        fontSize: 18, fontWeight: 700,
+        fontFamily: font,
         WebkitAppearance: 'none', MozAppearance: 'textfield',
       }}
     />
@@ -85,7 +82,11 @@ function PtsBadge({ pts, maxPts }) {
   const bg = full ? C.green : partial ? C.amber : C.red
   const fg = full ? C.greenDark : partial ? '#1a1000' : '#fff'
   return (
-    <span style={{ padding: '2px 8px', borderRadius: 99, fontSize: 11, fontWeight: 800, background: bg, color: fg }}>
+    <span style={{
+      padding: '2px 8px', borderRadius: 99,
+      fontSize: 11, fontWeight: 800,
+      background: bg, color: fg,
+    }}>
       +{pts}
     </span>
   )
@@ -101,7 +102,9 @@ function LoginScreen({ onLogin }) {
   async function handleLogin() {
     const trimmed = name.trim()
     if (!trimmed) return setErr('Enter your name to continue')
-    setLoading(true); setErr('')
+    setLoading(true)
+    setErr('')
+    // Upsert player row
     const { error } = await supabase
       .from('players')
       .upsert({ name: trimmed }, { onConflict: 'name' })
@@ -127,6 +130,7 @@ function LoginScreen({ onLogin }) {
       <p style={{ color: C.textMuted, fontSize: 13, marginBottom: 32, textAlign: 'center' }}>
         USA · Canada · Mexico · June 11 – July 19
       </p>
+
       <div style={{
         background: C.surface, border: `1px solid ${C.border}`,
         borderRadius: 16, padding: 28, width: '100%', maxWidth: 360,
@@ -160,23 +164,23 @@ function LoginScreen({ onLogin }) {
 
 // ── MATCH CARD ─────────────────────────────────────────────────────────────
 
-function MatchCard({ match, pick, onPick, results }) {
+function MatchCard({ match, pick, onPick }) {
   const locked = LOCKED_IDS.includes(match.id)
-  const result = results?.[match.id]
+  const result = COMPLETED[match.id]
   const h = pick?.home
   const a = pick?.away
   const hasPick = h != null && a != null
 
   let badge = null
-  if (locked) {
+  if (result && hasPick) {
+    const pts = scoreGroupPick(pick, result)
+    badge = <PtsBadge pts={pts} maxPts={POINTS.GROUP_CORRECT + POINTS.GROUP_EXACT_BONUS} />
+  } else if (locked && !result) {
     badge = (
       <span style={{ padding: '2px 8px', borderRadius: 99, fontSize: 11, fontWeight: 800, background: C.green, color: C.greenDark }}>
         MAX ✓
       </span>
     )
-  } else if (result && hasPick) {
-    const pts = scoreGroupPick(pick, result)
-    badge = <PtsBadge pts={pts} maxPts={POINTS.GROUP_CORRECT + POINTS.GROUP_EXACT_BONUS} />
   }
 
   return (
@@ -185,15 +189,18 @@ function MatchCard({ match, pick, onPick, results }) {
       border: `1px solid ${locked ? 'rgba(0,230,118,0.15)' : C.border}`,
       borderRadius: 10, padding: '10px 12px', marginBottom: 8,
     }}>
+      {/* MD label + badge row */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <span style={{ fontSize: 10, color: C.textDim, fontWeight: 800, letterSpacing: 1 }}>
+        <span style={{ fontSize: 10, color: C.green, fontWeight: 800, letterSpacing: 1 }}>
           MATCHDAY {match.md}
         </span>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          {result && !locked && <span style={{ fontSize: 10, color: C.textDim }}>RESULT: {result.home}–{result.away}</span>}
+          {result && <span style={{ fontSize: 10, color: C.green }}>RESULT: {result.home}–{result.away}</span>}
           {badge}
         </div>
       </div>
+
+      {/* Teams + score inputs */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ flex: 1, fontSize: 13, color: locked ? C.textMuted : C.text, lineHeight: 1.3 }}>
           {match.home}
@@ -213,7 +220,7 @@ function MatchCard({ match, pick, onPick, results }) {
 
 // ── SCOREBOARD ─────────────────────────────────────────────────────────────
 
-function Scoreboard({ currentPlayer, results }) {
+function Scoreboard({ currentPlayer }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
 
@@ -221,21 +228,23 @@ function Scoreboard({ currentPlayer, results }) {
     async function load() {
       const { data: players } = await supabase.from('players').select('name')
       if (!players) return setLoading(false)
-      const scored = await Promise.all(players.map(async ({ name }) => {
-        const { data } = await supabase.from('picks').select('match_id, home, away').eq('player_name', name)
+      const results = await Promise.all(players.map(async ({ name }) => {
+        const { data } = await supabase
+          .from('picks')
+          .select('match_id, home, away')
+          .eq('player_name', name)
         const pickMap = {}
         ;(data || []).forEach(r => { pickMap[r.match_id] = { home: r.home, away: r.away } })
-        return { name, pts: calcTotal(pickMap, results) }
+        return { name, pts: calcTotal(pickMap) }
       }))
-      scored.sort((a, b) => b.pts - a.pts)
-      setRows(scored)
+      results.sort((a, b) => b.pts - a.pts)
+      setRows(results)
       setLoading(false)
     }
     load()
-  }, [results])
+  }, [])
 
   const medals = ['🥇', '🥈', '🥉']
-  const played = Object.keys(results || {}).length
 
   return (
     <div>
@@ -245,7 +254,7 @@ function Scoreboard({ currentPlayer, results }) {
       {loading ? (
         <p style={{ color: C.textMuted, fontSize: 13 }}>Loading scores…</p>
       ) : rows.length === 0 ? (
-        <p style={{ color: C.textMuted, fontSize: 13 }}>No players yet.</p>
+        <p style={{ color: C.textMuted, fontSize: 13 }}>No players yet. Be the first!</p>
       ) : (
         rows.map((r, i) => (
           <div key={r.name} style={{
@@ -270,203 +279,13 @@ function Scoreboard({ currentPlayer, results }) {
         ))
       )}
       <p style={{ fontSize: 11, color: C.textDim, marginTop: 12, textAlign: 'center' }}>
-        {played + 3} of 72 matches scored (incl. 3 locked) · Updates instantly as results are entered
+        Updates live as results come in · {Object.keys(COMPLETED).length} of 72 matches played
       </p>
     </div>
   )
 }
 
-// ── ADMIN PANEL ────────────────────────────────────────────────────────────
-
-const ADMIN_PIN = 'wc2026'
-
-function AdminPanel({ results, onResultsUpdate }) {
-  const [authed, setAuthed] = useState(false)
-  const [pin, setPin] = useState('')
-  const [pinErr, setPinErr] = useState('')
-  const [activeGroup, setActiveGroup] = useState('A')
-  const [localResults, setLocalResults] = useState({ ...results })
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
-
-  // Keep local in sync when results prop changes
-  useEffect(() => { setLocalResults({ ...results }) }, [results])
-
-  function handlePin() {
-    if (pin === ADMIN_PIN) { setAuthed(true); setPinErr('') }
-    else setPinErr('Wrong PIN')
-  }
-
-  async function saveResult(matchId, home, away) {
-    if (home === null || home === undefined || away === null || away === undefined) return
-    setSaving(true); setSaved(false)
-    await supabase.from('results').upsert(
-      { match_id: matchId, home, away },
-      { onConflict: 'match_id' }
-    )
-    const updated = { ...localResults, [matchId]: { home, away } }
-    setLocalResults(updated)
-    onResultsUpdate(updated)
-    setSaving(false); setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
-  }
-
-  async function deleteResult(matchId) {
-    await supabase.from('results').delete().eq('match_id', matchId)
-    const updated = { ...localResults }
-    delete updated[matchId]
-    setLocalResults(updated)
-    onResultsUpdate(updated)
-  }
-
-  if (!authed) {
-    return (
-      <div style={{ maxWidth: 320, margin: '40px auto' }}>
-        <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 800, letterSpacing: 1, marginBottom: 16 }}>
-          🔒 ADMIN — ENTER PIN
-        </div>
-        <input
-          type="password" placeholder="PIN"
-          value={pin}
-          onChange={e => { setPin(e.target.value); setPinErr('') }}
-          onKeyDown={e => e.key === 'Enter' && handlePin()}
-          style={{
-            width: '100%', padding: '12px 14px', marginBottom: 12,
-            background: '#060f20', border: `1px solid ${C.borderBlue}`,
-            borderRadius: 8, color: C.text, fontSize: 16, fontFamily: font, outline: 'none',
-          }}
-        />
-        {pinErr && <p style={{ color: C.red, fontSize: 12, marginBottom: 10 }}>{pinErr}</p>}
-        <Btn onClick={handlePin} style={{ width: '100%' }}>Enter</Btn>
-        <p style={{ color: C.textDim, fontSize: 11, marginTop: 12, textAlign: 'center' }}>
-          Default PIN: wc2026
-        </p>
-      </div>
-    )
-  }
-
-  const groupKeys = Object.keys(GROUPS)
-  const groupMatches = getGroupMatches(activeGroup).filter(m => !LOCKED_IDS.includes(m.id))
-
-  return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 800, letterSpacing: 1 }}>
-          ⚽ ENTER MATCH RESULTS
-        </div>
-        <div style={{ fontSize: 11, color: saving ? C.amber : saved ? C.green : C.textDim }}>
-          {saving ? 'Saving…' : saved ? 'Saved ✓' : `${Object.keys(localResults).length} results entered`}
-        </div>
-      </div>
-
-      <div style={{
-        background: 'rgba(21,101,192,0.08)', border: `1px solid ${C.borderBlue}`,
-        borderRadius: 8, padding: '10px 14px', marginBottom: 20, fontSize: 12, color: C.blueLight,
-      }}>
-        Enter final scores here. Scores save instantly to Supabase — no deploy needed.
-        Everyone's leaderboard updates automatically.
-      </div>
-
-      {/* Group tabs */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 20 }}>
-        {groupKeys.map(g => {
-          const ms = getGroupMatches(g).filter(m => !LOCKED_IDS.includes(m.id))
-          const entered = ms.filter(m => localResults[m.id]).length
-          const complete = entered === ms.length
-          return (
-            <button key={g} onClick={() => setActiveGroup(g)} style={{
-              padding: '6px 12px', borderRadius: 8, border: 'none',
-              cursor: 'pointer', fontWeight: 800, fontSize: 13, fontFamily: font,
-              background: activeGroup === g ? C.blue : complete ? 'rgba(0,230,118,0.12)' : C.surface,
-              color: activeGroup === g ? '#fff' : complete ? C.green : C.textMuted,
-              outline: activeGroup === g ? `2px solid ${C.blueBright}` : 'none',
-              outlineOffset: 1, position: 'relative',
-            }}>
-              {g}
-              {complete && activeGroup !== g && (
-                <span style={{
-                  position: 'absolute', top: -3, right: -3,
-                  width: 8, height: 8, borderRadius: 99,
-                  background: C.green, border: `1px solid ${C.bg}`,
-                }} />
-              )}
-            </button>
-          )
-        })}
-      </div>
-
-      {/* Group header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-        <span style={{
-          background: `linear-gradient(135deg, ${C.blue}, #0d47a1)`,
-          color: C.blueLight, fontWeight: 900, fontSize: 12,
-          padding: '4px 10px', borderRadius: 6, letterSpacing: 2,
-        }}>
-          GROUP {activeGroup}
-        </span>
-        <span style={{ fontSize: 12, color: C.textMuted }}>
-          {GROUPS[activeGroup].map(t => t.split(' ').slice(1).join(' ')).join(' · ')}
-        </span>
-      </div>
-
-      {/* Match result rows */}
-      {groupMatches.map(m => {
-        const r = localResults[m.id]
-        const [rh, setRh] = useState(r?.home ?? null)
-        const [ra, setRa] = useState(r?.away ?? null)
-
-        return (
-          <div key={m.id} style={{
-            background: r ? 'rgba(0,230,118,0.04)' : C.surface,
-            border: `1px solid ${r ? 'rgba(0,230,118,0.2)' : C.border}`,
-            borderRadius: 10, padding: '10px 12px', marginBottom: 8,
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-              <span style={{ fontSize: 10, color: C.textDim, fontWeight: 800, letterSpacing: 1 }}>
-                MD{m.md} · {m.id}
-              </span>
-              {r && (
-                <button onClick={() => deleteResult(m.id)} style={{
-                  background: 'none', border: 'none', cursor: 'pointer',
-                  color: C.red, fontSize: 11, fontFamily: font,
-                }}>
-                  clear ✕
-                </button>
-              )}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ flex: 1, fontSize: 13, color: C.text }}>{m.home}</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                <ScoreInput value={rh} onChange={v => setRh(v)} disabled={false} />
-                <span style={{ color: C.textDim, fontWeight: 700, fontSize: 14 }}>–</span>
-                <ScoreInput value={ra} onChange={v => setRa(v)} disabled={false} />
-              </div>
-              <span style={{ flex: 1, fontSize: 13, color: C.text, textAlign: 'right' }}>{m.away}</span>
-            </div>
-            <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
-              <button
-                onClick={() => saveResult(m.id, rh, ra)}
-                disabled={rh === null || ra === null}
-                style={{
-                  padding: '6px 16px', borderRadius: 6, border: 'none',
-                  cursor: rh === null || ra === null ? 'not-allowed' : 'pointer',
-                  background: r ? 'rgba(0,230,118,0.15)' : C.blue,
-                  color: r ? C.green : '#fff',
-                  fontWeight: 700, fontSize: 12, fontFamily: font,
-                  opacity: rh === null || ra === null ? 0.4 : 1,
-                }}
-              >
-                {r ? 'Update Result' : 'Save Result'}
-              </button>
-            </div>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-// ── RULES ──────────────────────────────────────────────────────────────────
+// ── RULES PANEL ────────────────────────────────────────────────────────────
 
 function Rules() {
   return (
@@ -479,13 +298,13 @@ function Rules() {
         📋 SCORING RULES
       </div>
       <div>🎯 Correct result (win or draw) → <b>+3 pts</b></div>
-      <div>🔢 Exact scoreline bonus → <b>+2 pts</b> <span style={{ color: C.textDim, fontSize: 11 }}>(max 5 pts per match)</span></div>
+      <div>🔢 Exact scoreline bonus → <b>+2 pts</b> &nbsp;<span style={{ color: C.textDim, fontSize: 11 }}>(max 5 pts per match)</span></div>
       <div>❌ Wrong result → 0 pts</div>
       <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.borderBlue}`, fontSize: 12, color: C.textMuted }}>
         Knockout rounds: +5 correct · +2 exact bonus
       </div>
       <div style={{ marginTop: 6, fontSize: 12, color: C.green }}>
-        ✓ First 3 matches locked — everyone gets max 5 pts automatically
+        ✓ First 3 matches (Mexico–SA, Korea–Czechia, Canada–Bosnia) locked — everyone gets max 5 pts
       </div>
     </div>
   )
@@ -493,17 +312,20 @@ function Rules() {
 
 // ── PICKS TAB ──────────────────────────────────────────────────────────────
 
-function PicksTab({ playerName, results }) {
+function PicksTab({ playerName }) {
   const [activeGroup, setActiveGroup] = useState('A')
   const [picks, setPicks] = useState({})
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState(null)
   const groupKeys = Object.keys(GROUPS)
 
+  // Load existing picks from Supabase
   useEffect(() => {
     async function loadPicks() {
       const { data } = await supabase
-        .from('picks').select('match_id, home, away').eq('player_name', playerName)
+        .from('picks')
+        .select('match_id, home, away')
+        .eq('player_name', playerName)
       if (data) {
         const map = {}
         data.forEach(r => { map[r.match_id] = { home: r.home, away: r.away } })
@@ -513,11 +335,14 @@ function PicksTab({ playerName, results }) {
     loadPicks()
   }, [playerName])
 
+  // Debounced save to Supabase
   const savePick = useCallback(async (matchId, score) => {
     setSaving(true)
     await supabase.from('picks').upsert({
-      player_name: playerName, match_id: matchId,
-      home: score.home, away: score.away,
+      player_name: playerName,
+      match_id: matchId,
+      home: score.home,
+      away: score.away,
     }, { onConflict: 'player_name,match_id' })
     setSaving(false)
     setSavedAt(new Date())
@@ -562,7 +387,7 @@ function PicksTab({ playerName, results }) {
       {/* Download PDF button */}
       <div style={{ marginBottom: 20 }}>
         <button
-          onClick={() => generateBracketPDF(playerName, picks, results)}
+          onClick={() => generateBracketPDF(playerName, picks)}
           style={{
             width: '100%', padding: '11px 0',
             background: 'rgba(0,230,118,0.1)',
@@ -582,7 +407,9 @@ function PicksTab({ playerName, results }) {
       </div>
 
       {/* Group tab strip */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 20 }}>
+      <div style={{
+        display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 20,
+      }}>
         {groupKeys.map(g => {
           const ms = getGroupMatches(g)
           const filled = ms.filter(m => {
@@ -595,10 +422,16 @@ function PicksTab({ playerName, results }) {
             <button key={g} onClick={() => setActiveGroup(g)} style={{
               padding: '6px 12px', borderRadius: 8, border: 'none',
               cursor: 'pointer', fontWeight: 800, fontSize: 13,
-              background: activeGroup === g ? C.blue : complete ? 'rgba(0,230,118,0.12)' : C.surface,
-              color: activeGroup === g ? '#fff' : complete ? C.green : C.textMuted,
+              background: activeGroup === g
+                ? C.blue
+                : complete ? 'rgba(0,230,118,0.12)' : C.surface,
+              color: activeGroup === g
+                ? '#fff'
+                : complete ? C.green : C.textMuted,
               outline: activeGroup === g ? `2px solid ${C.blueBright}` : 'none',
-              outlineOffset: 1, position: 'relative', fontFamily: font,
+              outlineOffset: 1,
+              position: 'relative',
+              fontFamily: font,
             }}>
               {g}
               {complete && activeGroup !== g && (
@@ -614,7 +447,9 @@ function PicksTab({ playerName, results }) {
       </div>
 
       {/* Group header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12,
+      }}>
         <span style={{
           background: `linear-gradient(135deg, ${C.blue}, #0d47a1)`,
           color: C.blueLight, fontWeight: 900, fontSize: 12,
@@ -629,8 +464,157 @@ function PicksTab({ playerName, results }) {
 
       {/* Match cards */}
       {groupMatches.map(m => (
-        <MatchCard key={m.id} match={m} pick={picks[m.id]} onPick={handlePick} results={results} />
+        <MatchCard
+          key={m.id}
+          match={m}
+          pick={picks[m.id]}
+          onPick={handlePick}
+        />
       ))}
+    </div>
+  )
+}
+
+// ── ADMIN TAB ──────────────────────────────────────────────────────────────
+
+function AdminTab() {
+  const [players, setPlayers] = useState([])
+  const [selectedPlayer, setSelectedPlayer] = useState('')
+  const [picks, setPicks] = useState({})
+  const [activeGroup, setActiveGroup] = useState('A')
+  const [loading, setLoading] = useState(true)
+  const groupKeys = Object.keys(GROUPS)
+
+  useEffect(() => {
+    async function loadPlayers() {
+      const { data } = await supabase.from('players').select('name').order('name')
+      if (data) {
+        const names = data.map(p => p.name)
+        setPlayers(names)
+        if (names.length > 0) setSelectedPlayer(names[0])
+      }
+      setLoading(false)
+    }
+    loadPlayers()
+  }, [])
+
+  useEffect(() => {
+    if (!selectedPlayer) return
+    async function loadPicks() {
+      const { data } = await supabase
+        .from('picks').select('match_id, home, away').eq('player_name', selectedPlayer)
+      const map = {}
+      ;(data || []).forEach(r => { map[r.match_id] = { home: r.home, away: r.away } })
+      setPicks(map)
+    }
+    loadPicks()
+  }, [selectedPlayer])
+
+  const groupMatches = getGroupMatches(activeGroup)
+  const totalFilled = ALL_MATCHES.filter(m => {
+    if (LOCKED_IDS.includes(m.id)) return true
+    const p = picks[m.id]
+    return p?.home != null && p?.away != null
+  }).length
+
+  return (
+    <div>
+      <div style={{
+        background: C.surface, borderRadius: 10, padding: '14px 16px',
+        border: `1px solid ${C.border}`, marginBottom: 20,
+      }}>
+        <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: C.textMuted, letterSpacing: 1, marginBottom: 8 }}>
+          VIEWING PICKS FOR
+        </label>
+        {loading ? (
+          <p style={{ color: C.textMuted, fontSize: 13 }}>Loading players…</p>
+        ) : (
+          <select
+            value={selectedPlayer}
+            onChange={e => setSelectedPlayer(e.target.value)}
+            style={{
+              width: '100%', padding: '10px 12px',
+              background: '#060f20', border: `1px solid ${C.borderBlue}`,
+              borderRadius: 8, color: C.text, fontSize: 15,
+              fontFamily: font, fontWeight: 700, cursor: 'pointer',
+            }}
+          >
+            {players.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        )}
+        <div style={{ marginTop: 10, fontSize: 11, color: C.textMuted }}>
+          {totalFilled} / {ALL_MATCHES.length} picks entered
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 20 }}>
+        {groupKeys.map(g => (
+          <button key={g} onClick={() => setActiveGroup(g)} style={{
+            padding: '6px 12px', borderRadius: 8, border: 'none',
+            cursor: 'pointer', fontWeight: 800, fontSize: 13,
+            background: activeGroup === g ? C.blue : C.surface,
+            color: activeGroup === g ? '#fff' : C.textMuted,
+            outline: activeGroup === g ? `2px solid ${C.blueBright}` : 'none',
+            outlineOffset: 1, fontFamily: font,
+          }}>
+            {g}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+        <span style={{
+          background: `linear-gradient(135deg, ${C.blue}, #0d47a1)`,
+          color: C.blueLight, fontWeight: 900, fontSize: 12,
+          padding: '4px 10px', borderRadius: 6, letterSpacing: 2,
+        }}>
+          GROUP {activeGroup}
+        </span>
+        <span style={{ fontSize: 12, color: C.textMuted }}>
+          {GROUPS[activeGroup].map(t => t.split(' ').slice(1).join(' ')).join(' · ')}
+        </span>
+      </div>
+
+      {groupMatches.map(m => {
+        const pick = picks[m.id]
+        const result = COMPLETED[m.id]
+        const hasPick = pick?.home != null && pick?.away != null
+        let badge = null
+        if (result && hasPick) {
+          const pts = scoreGroupPick(pick, result)
+          badge = <PtsBadge pts={pts} maxPts={POINTS.GROUP_CORRECT + POINTS.GROUP_EXACT_BONUS} />
+        }
+        return (
+          <div key={m.id} style={{
+            background: 'rgba(255,255,255,0.025)', border: `1px solid ${C.border}`,
+            borderRadius: 10, padding: '10px 12px', marginBottom: 8,
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ fontSize: 10, color: C.green, fontWeight: 800, letterSpacing: 1 }}>
+                MATCHDAY {m.md}
+              </span>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                {result && <span style={{ fontSize: 10, color: C.green }}>RESULT: {result.home}–{result.away}</span>}
+                {badge}
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ flex: 1, fontSize: 13, color: C.text, lineHeight: 1.3 }}>{m.home}</span>
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                gap: 6, flexShrink: 0, minWidth: 80,
+                background: '#060f20', border: `1px solid ${C.textDim}`,
+                borderRadius: 6, padding: '5px 14px',
+                fontSize: 18, fontWeight: 700,
+                color: hasPick ? C.text : C.textDim,
+              }}>
+                {hasPick ? `${pick.home} – ${pick.away}` : '· – ·'}
+              </div>
+              <span style={{ flex: 1, fontSize: 13, color: C.text, textAlign: 'right', lineHeight: 1.3 }}>{m.away}</span>
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -640,12 +624,6 @@ function PicksTab({ playerName, results }) {
 export default function App() {
   const [player, setPlayer] = useState(() => localStorage.getItem('wc2026_player') || null)
   const [tab, setTab] = useState('picks')
-  const [results, setResults] = useState({})
-
-  // Load results once on mount
-  useEffect(() => {
-    fetchResults().then(setResults)
-  }, [])
 
   function handleLogin(name) {
     localStorage.setItem('wc2026_player', name)
@@ -659,11 +637,7 @@ export default function App() {
 
   if (!player) return <LoginScreen onLogin={handleLogin} />
 
-  const tabs = [
-    { id: 'picks', label: '🗳️ My Picks' },
-    { id: 'scores', label: '🏆 Scoreboard' },
-    { id: 'admin', label: '⚙️ Admin' },
-  ]
+  const pts = 0 // real-time pts shown in scoreboard
 
   return (
     <div style={{
@@ -674,30 +648,50 @@ export default function App() {
       <div style={{
         background: `linear-gradient(90deg, ${C.surface}, #0d2a5e)`,
         borderBottom: `2px solid ${C.blue}`,
-        padding: '14px 16px', position: 'sticky', top: 0, zIndex: 10,
+        padding: '14px 16px',
+        position: 'sticky', top: 0, zIndex: 10,
       }}>
         <div style={{ maxWidth: 640, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div>
-            <div style={{ fontSize: 10, letterSpacing: 3, color: C.blueLight, fontWeight: 800 }}>
-              ⚽ WC 2026 BRACKET
-            </div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{player}</div>
+          <div style={{ fontSize: 10, letterSpacing: 3, color: C.blueLight, fontWeight: 800 }}>
+            2026 WORLD CUP PREDICTION GAME
           </div>
-          <button onClick={handleLogout} style={{
-            background: 'transparent', border: `1px solid ${C.border}`,
-            borderRadius: 6, padding: '5px 10px', color: C.textMuted,
-            fontSize: 11, cursor: 'pointer', fontFamily: font,
-          }}>
-            Switch player
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
+              {player}
+            </div>
+            <button onClick={handleLogout} style={{
+              background: 'transparent', border: `1px solid ${C.border}`,
+              borderRadius: 6, padding: '5px 10px', color: C.textMuted,
+              fontSize: 11, cursor: 'pointer', fontFamily: font,
+            }}>
+              Switch player
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Main content */}
-      <div style={{ maxWidth: 640, margin: '0 auto', padding: '20px 16px 80px' }}>
-        {tab === 'picks' && <PicksTab playerName={player} results={results} />}
-        {tab === 'scores' && <Scoreboard currentPlayer={player} results={results} />}
-        {tab === 'admin' && <AdminPanel results={results} onResultsUpdate={setResults} />}
+      {/* Content area with full background image */}
+      <div style={{
+        position: 'relative',
+        backgroundImage: `url(https://i.imgur.com/vk7aIFj.jpeg)`,
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        minHeight: 'calc(100vh - 53px - 53px)',
+      }}>
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: 'rgba(3,11,26,0.62)',
+          pointerEvents: 'none',
+        }} />
+        <div style={{ maxWidth: 640, margin: '0 auto', padding: '20px 16px 80px', position: 'relative', zIndex: 1 }}>
+          {tab === 'picks' ? (
+            <PicksTab playerName={player} />
+          ) : tab === 'admin' ? (
+            <AdminTab />
+          ) : (
+            <Scoreboard currentPlayer={player} />
+          )}
+        </div>
       </div>
 
       {/* Bottom nav */}
@@ -706,7 +700,11 @@ export default function App() {
         background: C.surface, borderTop: `1px solid ${C.border}`,
         display: 'flex', zIndex: 10,
       }}>
-        {tabs.map(t => (
+        {[
+          { id: 'picks', label: '🗳️ My Picks' },
+          { id: 'scores', label: '🏆 Scoreboard' },
+          ...(player === 'Dhino' ? [{ id: 'admin', label: '👁️ Admin' }] : []),
+        ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} style={{
             flex: 1, padding: '14px 0', border: 'none', cursor: 'pointer',
             background: tab === t.id ? 'rgba(21,101,192,0.2)' : 'transparent',
