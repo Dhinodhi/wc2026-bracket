@@ -526,6 +526,15 @@ export default function App() {
         </div>
       </div>
 
+      {/* Hero banner */}
+      <div style={{ width: '100%', overflow: 'hidden', lineHeight: 0 }}>
+        <img
+          src="https://i.imgur.com/vk7aIFj.jpeg"
+          alt="WC 2026"
+          style={{ width: '100%', maxHeight: 220, objectFit: 'cover', objectPosition: 'center' }}
+        />
+      </div>
+
       {/* Main content */}
       <div style={{ maxWidth: 640, margin: '0 auto', padding: '20px 16px 80px' }}>
         {tab === 'picks' ? (
