@@ -526,22 +526,26 @@ export default function App() {
         </div>
       </div>
 
-      {/* Hero banner */}
-      <div style={{ width: '100%', overflow: 'hidden', lineHeight: 0 }}>
-        <img
-          src="https://i.imgur.com/vk7aIFj.jpeg"
-          alt="WC 2026"
-          style={{ width: '100%', maxHeight: 220, objectFit: 'cover', objectPosition: 'center' }}
-        />
-      </div>
-
-      {/* Main content */}
-      <div style={{ maxWidth: 640, margin: '0 auto', padding: '20px 16px 80px' }}>
-        {tab === 'picks' ? (
-          <PicksTab playerName={player} />
-        ) : (
-          <Scoreboard currentPlayer={player} />
-        )}
+      {/* Content area with full background image */}
+      <div style={{
+        position: 'relative',
+        backgroundImage: `url(https://i.imgur.com/vk7aIFj.jpeg)`,
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        minHeight: 'calc(100vh - 53px - 53px)',
+      }}>
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: 'rgba(3,11,26,0.72)',
+          pointerEvents: 'none',
+        }} />
+        <div style={{ maxWidth: 640, margin: '0 auto', padding: '20px 16px 80px', position: 'relative', zIndex: 1 }}>
+          {tab === 'picks' ? (
+            <PicksTab playerName={player} />
+          ) : (
+            <Scoreboard currentPlayer={player} />
+          )}
+        </div>
       </div>
 
       {/* Bottom nav */}
