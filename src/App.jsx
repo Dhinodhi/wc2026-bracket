@@ -508,21 +508,21 @@ export default function App() {
         position: 'sticky', top: 0, zIndex: 10,
       }}>
         <div style={{ maxWidth: 640, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div>
-            <div style={{ fontSize: 10, letterSpacing: 3, color: C.blueLight, fontWeight: 800 }}>
-              ⚽ WC 2026 BRACKET
-            </div>
+          <div style={{ fontSize: 10, letterSpacing: 3, color: C.blueLight, fontWeight: 800 }}>
+            2026 WORLD CUP BRACKET
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
               {player}
             </div>
+            <button onClick={handleLogout} style={{
+              background: 'transparent', border: `1px solid ${C.border}`,
+              borderRadius: 6, padding: '5px 10px', color: C.textMuted,
+              fontSize: 11, cursor: 'pointer', fontFamily: font,
+            }}>
+              Switch player
+            </button>
           </div>
-          <button onClick={handleLogout} style={{
-            background: 'transparent', border: `1px solid ${C.border}`,
-            borderRadius: 6, padding: '5px 10px', color: C.textMuted,
-            fontSize: 11, cursor: 'pointer', fontFamily: font,
-          }}>
-            Switch player
-          </button>
         </div>
       </div>
 
@@ -536,7 +536,7 @@ export default function App() {
       }}>
         <div style={{
           position: 'absolute', inset: 0,
-          background: 'rgba(3,11,26,0.72)',
+          background: 'rgba(3,11,26,0.62)',
           pointerEvents: 'none',
         }} />
         <div style={{ maxWidth: 640, margin: '0 auto', padding: '20px 16px 80px', position: 'relative', zIndex: 1 }}>
