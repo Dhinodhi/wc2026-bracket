@@ -195,7 +195,7 @@ function MatchCard({ match, pick, onPick }) {
           MATCHDAY {match.md}
         </span>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          {result && <span style={{ fontSize: 10, color: C.textDim }}>RESULT: {result.home}–{result.away}</span>}
+          {result && <span style={{ fontSize: 10, color: C.green }}>RESULT: {result.home}–{result.away}</span>}
           {badge}
         </div>
       </div>
@@ -594,7 +594,7 @@ function AdminTab() {
                 MATCHDAY {m.md}
               </span>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                {result && <span style={{ fontSize: 10, color: C.textDim }}>RESULT: {result.home}–{result.away}</span>}
+                {result && <span style={{ fontSize: 10, color: C.green }}>RESULT: {result.home}–{result.away}</span>}
                 {badge}
               </div>
             </div>
@@ -653,7 +653,7 @@ export default function App() {
       }}>
         <div style={{ maxWidth: 640, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ fontSize: 10, letterSpacing: 3, color: C.blueLight, fontWeight: 800 }}>
-            2026 WORLD CUP BRACKET
+            2026 WORLD CUP PREDICTION GAME
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
