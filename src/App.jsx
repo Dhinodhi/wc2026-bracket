@@ -4,6 +4,7 @@ import {
   GROUPS, getGroupMatches, ALL_MATCHES,
   COMPLETED, LOCKED_IDS, POINTS, scoreGroupPick, calcTotal
 } from './data'
+import { generateBracketPDF } from './generatePDF'
 
 // ── DESIGN TOKENS ──────────────────────────────────────────────────────────
 const C = {
@@ -381,6 +382,28 @@ function PicksTab({ playerName }) {
             transition: 'width 0.3s',
           }} />
         </div>
+      </div>
+
+      {/* Download PDF button */}
+      <div style={{ marginBottom: 20 }}>
+        <button
+          onClick={() => generateBracketPDF(playerName, picks)}
+          style={{
+            width: '100%', padding: '11px 0',
+            background: 'rgba(0,230,118,0.1)',
+            border: '1px solid rgba(0,230,118,0.3)',
+            borderRadius: 8, cursor: 'pointer',
+            color: C.green, fontWeight: 800, fontSize: 13,
+            fontFamily: font, display: 'flex',
+            alignItems: 'center', justifyContent: 'center', gap: 8,
+          }}
+        >
+          <span style={{ fontSize: 16 }}>⬇</span>
+          Download My Bracket PDF
+          <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 400 }}>
+            — snapshot of current picks
+          </span>
+        </button>
       </div>
 
       {/* Group tab strip */}
