@@ -475,6 +475,150 @@ function PicksTab({ playerName }) {
   )
 }
 
+// ── ADMIN TAB ──────────────────────────────────────────────────────────────
+
+function AdminTab() {
+  const [players, setPlayers] = useState([])
+  const [selectedPlayer, setSelectedPlayer] = useState('')
+  const [picks, setPicks] = useState({})
+  const [activeGroup, setActiveGroup] = useState('A')
+  const [loading, setLoading] = useState(true)
+  const groupKeys = Object.keys(GROUPS)
+
+  useEffect(() => {
+    async function loadPlayers() {
+      const { data } = await supabase.from('players').select('name').order('name')
+      if (data) {
+        const names = data.map(p => p.name)
+        setPlayers(names)
+        if (names.length > 0) setSelectedPlayer(names[0])
+      }
+      setLoading(false)
+    }
+    loadPlayers()
+  }, [])
+
+  useEffect(() => {
+    if (!selectedPlayer) return
+    async function loadPicks() {
+      const { data } = await supabase
+        .from('picks').select('match_id, home, away').eq('player_name', selectedPlayer)
+      const map = {}
+      ;(data || []).forEach(r => { map[r.match_id] = { home: r.home, away: r.away } })
+      setPicks(map)
+    }
+    loadPicks()
+  }, [selectedPlayer])
+
+  const groupMatches = getGroupMatches(activeGroup)
+  const totalFilled = ALL_MATCHES.filter(m => {
+    if (LOCKED_IDS.includes(m.id)) return true
+    const p = picks[m.id]
+    return p?.home != null && p?.away != null
+  }).length
+
+  return (
+    <div>
+      <div style={{
+        background: C.surface, borderRadius: 10, padding: '14px 16px',
+        border: `1px solid ${C.border}`, marginBottom: 20,
+      }}>
+        <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: C.textMuted, letterSpacing: 1, marginBottom: 8 }}>
+          VIEWING PICKS FOR
+        </label>
+        {loading ? (
+          <p style={{ color: C.textMuted, fontSize: 13 }}>Loading players…</p>
+        ) : (
+          <select
+            value={selectedPlayer}
+            onChange={e => setSelectedPlayer(e.target.value)}
+            style={{
+              width: '100%', padding: '10px 12px',
+              background: '#060f20', border: `1px solid ${C.borderBlue}`,
+              borderRadius: 8, color: C.text, fontSize: 15,
+              fontFamily: font, fontWeight: 700, cursor: 'pointer',
+            }}
+          >
+            {players.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        )}
+        <div style={{ marginTop: 10, fontSize: 11, color: C.textMuted }}>
+          {totalFilled} / {ALL_MATCHES.length} picks entered
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 20 }}>
+        {groupKeys.map(g => (
+          <button key={g} onClick={() => setActiveGroup(g)} style={{
+            padding: '6px 12px', borderRadius: 8, border: 'none',
+            cursor: 'pointer', fontWeight: 800, fontSize: 13,
+            background: activeGroup === g ? C.blue : C.surface,
+            color: activeGroup === g ? '#fff' : C.textMuted,
+            outline: activeGroup === g ? `2px solid ${C.blueBright}` : 'none',
+            outlineOffset: 1, fontFamily: font,
+          }}>
+            {g}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+        <span style={{
+          background: `linear-gradient(135deg, ${C.blue}, #0d47a1)`,
+          color: C.blueLight, fontWeight: 900, fontSize: 12,
+          padding: '4px 10px', borderRadius: 6, letterSpacing: 2,
+        }}>
+          GROUP {activeGroup}
+        </span>
+        <span style={{ fontSize: 12, color: C.textMuted }}>
+          {GROUPS[activeGroup].map(t => t.split(' ').slice(1).join(' ')).join(' · ')}
+        </span>
+      </div>
+
+      {groupMatches.map(m => {
+        const pick = picks[m.id]
+        const result = COMPLETED[m.id]
+        const hasPick = pick?.home != null && pick?.away != null
+        let badge = null
+        if (result && hasPick) {
+          const pts = scoreGroupPick(pick, result)
+          badge = <PtsBadge pts={pts} maxPts={POINTS.GROUP_CORRECT + POINTS.GROUP_EXACT_BONUS} />
+        }
+        return (
+          <div key={m.id} style={{
+            background: 'rgba(255,255,255,0.025)', border: `1px solid ${C.border}`,
+            borderRadius: 10, padding: '10px 12px', marginBottom: 8,
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ fontSize: 10, color: C.green, fontWeight: 800, letterSpacing: 1 }}>
+                MATCHDAY {m.md}
+              </span>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                {result && <span style={{ fontSize: 10, color: C.textDim }}>RESULT: {result.home}–{result.away}</span>}
+                {badge}
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ flex: 1, fontSize: 13, color: C.text, lineHeight: 1.3 }}>{m.home}</span>
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                gap: 6, flexShrink: 0, minWidth: 80,
+                background: '#060f20', border: `1px solid ${C.textDim}`,
+                borderRadius: 6, padding: '5px 14px',
+                fontSize: 18, fontWeight: 700,
+                color: hasPick ? C.text : C.textDim,
+              }}>
+                {hasPick ? `${pick.home} – ${pick.away}` : '· – ·'}
+              </div>
+              <span style={{ flex: 1, fontSize: 13, color: C.text, textAlign: 'right', lineHeight: 1.3 }}>{m.away}</span>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // ── ROOT APP ───────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -542,6 +686,8 @@ export default function App() {
         <div style={{ maxWidth: 640, margin: '0 auto', padding: '20px 16px 80px', position: 'relative', zIndex: 1 }}>
           {tab === 'picks' ? (
             <PicksTab playerName={player} />
+          ) : tab === 'admin' ? (
+            <AdminTab />
           ) : (
             <Scoreboard currentPlayer={player} />
           )}
@@ -557,6 +703,7 @@ export default function App() {
         {[
           { id: 'picks', label: '🗳️ My Picks' },
           { id: 'scores', label: '🏆 Scoreboard' },
+          ...(player === 'Dhino' ? [{ id: 'admin', label: '👁️ Admin' }] : []),
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} style={{
             flex: 1, padding: '14px 0', border: 'none', cursor: 'pointer',
