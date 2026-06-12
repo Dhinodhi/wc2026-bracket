@@ -64,8 +64,8 @@ export function calcTotal(picks) {
   ALL_MATCHES.forEach((m) => {
     const result = COMPLETED[m.id]
     const pick = picks?.[m.id]
-    if (LOCKED_IDS.includes(m.id) && !result) {
-      // In-progress locked match — grant max group points
+    if (LOCKED_IDS.includes(m.id)) {
+      // All locked matches — grant max group points regardless of result
       total += POINTS.GROUP_CORRECT + POINTS.GROUP_EXACT_BONUS
     } else if (result && pick) {
       total += scoreGroupPick(pick, result)
