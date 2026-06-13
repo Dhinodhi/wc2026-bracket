@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { supabase } from './supabase'
 import {
   GROUPS, getGroupMatches, ALL_MATCHES,
-  COMPLETED, LOCKED_IDS, POINTS, scoreGroupPick, calcTotal
+  LOCKED_IDS, POINTS, scoreGroupPick, calcTotal
 } from './data'
 import { generateBracketPDF } from './generatePDF'
 
@@ -27,6 +27,15 @@ const C = {
 }
 
 const font = "'Inter', 'Segoe UI', sans-serif"
+
+// ── FETCH RESULTS ──────────────────────────────────────────────────────────
+
+async function fetchResults() {
+  const { data } = await supabase.from('results').select('match_id, home, away')
+  const map = {}
+  ;(data || []).forEach(r => { map[r.match_id] = { home: r.home, away: r.away } })
+  return map
+}
 
 // ── SMALL COMPONENTS ───────────────────────────────────────────────────────
 
@@ -104,7 +113,6 @@ function LoginScreen({ onLogin }) {
     if (!trimmed) return setErr('Enter your name to continue')
     setLoading(true)
     setErr('')
-    // Upsert player row
     const { error } = await supabase
       .from('players')
       .upsert({ name: trimmed }, { onConflict: 'name' })
@@ -164,23 +172,23 @@ function LoginScreen({ onLogin }) {
 
 // ── MATCH CARD ─────────────────────────────────────────────────────────────
 
-function MatchCard({ match, pick, onPick }) {
+function MatchCard({ match, pick, onPick, results }) {
   const locked = LOCKED_IDS.includes(match.id)
-  const result = COMPLETED[match.id]
+  const result = results?.[match.id]
   const h = pick?.home
   const a = pick?.away
   const hasPick = h != null && a != null
 
   let badge = null
-  if (result && hasPick) {
-    const pts = scoreGroupPick(pick, result)
-    badge = <PtsBadge pts={pts} maxPts={POINTS.GROUP_CORRECT + POINTS.GROUP_EXACT_BONUS} />
-  } else if (locked && !result) {
+  if (locked) {
     badge = (
       <span style={{ padding: '2px 8px', borderRadius: 99, fontSize: 11, fontWeight: 800, background: C.green, color: C.greenDark }}>
         MAX ✓
       </span>
     )
+  } else if (result && hasPick) {
+    const pts = scoreGroupPick(pick, result)
+    badge = <PtsBadge pts={pts} maxPts={POINTS.GROUP_CORRECT + POINTS.GROUP_EXACT_BONUS} />
   }
 
   return (
@@ -189,7 +197,6 @@ function MatchCard({ match, pick, onPick }) {
       border: `1px solid ${locked ? 'rgba(0,230,118,0.15)' : C.border}`,
       borderRadius: 10, padding: '10px 12px', marginBottom: 8,
     }}>
-      {/* MD label + badge row */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
         <span style={{ fontSize: 10, color: C.green, fontWeight: 800, letterSpacing: 1 }}>
           MATCHDAY {match.md}
@@ -200,7 +207,6 @@ function MatchCard({ match, pick, onPick }) {
         </div>
       </div>
 
-      {/* Teams + score inputs */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ flex: 1, fontSize: 13, color: locked ? C.textMuted : C.text, lineHeight: 1.3 }}>
           {match.home}
@@ -220,7 +226,7 @@ function MatchCard({ match, pick, onPick }) {
 
 // ── SCOREBOARD ─────────────────────────────────────────────────────────────
 
-function Scoreboard({ currentPlayer }) {
+function Scoreboard({ currentPlayer, results }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
 
@@ -228,21 +234,21 @@ function Scoreboard({ currentPlayer }) {
     async function load() {
       const { data: players } = await supabase.from('players').select('name')
       if (!players) return setLoading(false)
-      const results = await Promise.all(players.map(async ({ name }) => {
+      const scored = await Promise.all(players.map(async ({ name }) => {
         const { data } = await supabase
           .from('picks')
           .select('match_id, home, away')
           .eq('player_name', name)
         const pickMap = {}
         ;(data || []).forEach(r => { pickMap[r.match_id] = { home: r.home, away: r.away } })
-        return { name, pts: calcTotal(pickMap) }
+        return { name, pts: calcTotal(pickMap, results) }
       }))
-      results.sort((a, b) => b.pts - a.pts)
-      setRows(results)
+      scored.sort((a, b) => b.pts - a.pts)
+      setRows(scored)
       setLoading(false)
     }
     load()
-  }, [])
+  }, [results])
 
   const medals = ['🥇', '🥈', '🥉']
 
@@ -279,7 +285,7 @@ function Scoreboard({ currentPlayer }) {
         ))
       )}
       <p style={{ fontSize: 11, color: C.textDim, marginTop: 12, textAlign: 'center' }}>
-        Updates live as results come in · {Object.keys(COMPLETED).length} of 72 matches played
+        Updates live as results come in · {Object.keys(results).length} of 72 matches played
       </p>
     </div>
   )
@@ -312,14 +318,13 @@ function Rules() {
 
 // ── PICKS TAB ──────────────────────────────────────────────────────────────
 
-function PicksTab({ playerName }) {
+function PicksTab({ playerName, results }) {
   const [activeGroup, setActiveGroup] = useState('A')
   const [picks, setPicks] = useState({})
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState(null)
   const groupKeys = Object.keys(GROUPS)
 
-  // Load existing picks from Supabase
   useEffect(() => {
     async function loadPicks() {
       const { data } = await supabase
@@ -335,7 +340,6 @@ function PicksTab({ playerName }) {
     loadPicks()
   }, [playerName])
 
-  // Debounced save to Supabase
   const savePick = useCallback(async (matchId, score) => {
     setSaving(true)
     await supabase.from('picks').upsert({
@@ -364,7 +368,6 @@ function PicksTab({ playerName }) {
     <div>
       <Rules />
 
-      {/* Progress bar */}
       <div style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
           <span style={{ fontSize: 11, color: C.textMuted, fontWeight: 700, letterSpacing: 1 }}>PICKS ENTERED</span>
@@ -384,7 +387,6 @@ function PicksTab({ playerName }) {
         </div>
       </div>
 
-      {/* Download PDF button */}
       <div style={{ marginBottom: 20 }}>
         <button
           onClick={() => generateBracketPDF(playerName, picks)}
@@ -406,10 +408,7 @@ function PicksTab({ playerName }) {
         </button>
       </div>
 
-      {/* Group tab strip */}
-      <div style={{
-        display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 20,
-      }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 20 }}>
         {groupKeys.map(g => {
           const ms = getGroupMatches(g)
           const filled = ms.filter(m => {
@@ -446,10 +445,7 @@ function PicksTab({ playerName }) {
         })}
       </div>
 
-      {/* Group header */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12,
-      }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
         <span style={{
           background: `linear-gradient(135deg, ${C.blue}, #0d47a1)`,
           color: C.blueLight, fontWeight: 900, fontSize: 12,
@@ -462,104 +458,137 @@ function PicksTab({ playerName }) {
         </span>
       </div>
 
-      {/* Match cards */}
       {groupMatches.map(m => (
         <MatchCard
           key={m.id}
           match={m}
           pick={picks[m.id]}
           onPick={handlePick}
+          results={results}
         />
       ))}
     </div>
   )
 }
 
-// ── ADMIN TAB ──────────────────────────────────────────────────────────────
+// ── ADMIN PANEL ────────────────────────────────────────────────────────────
 
-function AdminTab() {
-  const [players, setPlayers] = useState([])
-  const [selectedPlayer, setSelectedPlayer] = useState('')
-  const [picks, setPicks] = useState({})
+function AdminPanel({ results, onRefresh }) {
+  const [pin, setPin] = useState('')
+  const [unlocked, setUnlocked] = useState(false)
+  const [pinErr, setPinErr] = useState('')
   const [activeGroup, setActiveGroup] = useState('A')
-  const [loading, setLoading] = useState(true)
+  const [draft, setDraft] = useState({})
+  const [saving, setSaving] = useState({})
   const groupKeys = Object.keys(GROUPS)
 
-  useEffect(() => {
-    async function loadPlayers() {
-      const { data } = await supabase.from('players').select('name').order('name')
-      if (data) {
-        const names = data.map(p => p.name)
-        setPlayers(names)
-        if (names.length > 0) setSelectedPlayer(names[0])
-      }
-      setLoading(false)
+  function handleUnlock() {
+    if (pin === 'wc2026') {
+      setUnlocked(true)
+      setPinErr('')
+    } else {
+      setPinErr('Incorrect PIN')
     }
-    loadPlayers()
-  }, [])
+  }
 
-  useEffect(() => {
-    if (!selectedPlayer) return
-    async function loadPicks() {
-      const { data } = await supabase
-        .from('picks').select('match_id, home, away').eq('player_name', selectedPlayer)
-      const map = {}
-      ;(data || []).forEach(r => { map[r.match_id] = { home: r.home, away: r.away } })
-      setPicks(map)
-    }
-    loadPicks()
-  }, [selectedPlayer])
+  function getScore(matchId, side) {
+    if (draft[matchId]?.[side] !== undefined) return draft[matchId][side]
+    return results[matchId]?.[side] ?? null
+  }
+
+  function setScore(matchId, side, val) {
+    setDraft(prev => ({
+      ...prev,
+      [matchId]: { ...prev[matchId], [side]: val },
+    }))
+  }
+
+  async function saveMatch(matchId) {
+    const home = getScore(matchId, 'home')
+    const away = getScore(matchId, 'away')
+    if (home == null || away == null) return
+    setSaving(prev => ({ ...prev, [matchId]: true }))
+    await supabase.from('results').upsert(
+      { match_id: matchId, home, away },
+      { onConflict: 'match_id' }
+    )
+    setDraft(prev => { const next = { ...prev }; delete next[matchId]; return next })
+    setSaving(prev => ({ ...prev, [matchId]: false }))
+    onRefresh()
+  }
+
+  if (!unlocked) {
+    return (
+      <div style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center',
+        paddingTop: 48,
+      }}>
+        <div style={{ fontSize: 32, marginBottom: 12 }}>🔒</div>
+        <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 24, textAlign: 'center' }}>
+          Enter the admin PIN to manage match results
+        </div>
+        <div style={{
+          background: C.surface, border: `1px solid ${C.border}`,
+          borderRadius: 12, padding: 24, width: '100%', maxWidth: 320,
+        }}>
+          <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: C.textMuted, letterSpacing: 1, marginBottom: 8 }}>
+            PIN
+          </label>
+          <input
+            type="password"
+            value={pin}
+            onChange={e => { setPin(e.target.value); setPinErr('') }}
+            onKeyDown={e => e.key === 'Enter' && handleUnlock()}
+            placeholder="Enter PIN"
+            style={{
+              width: '100%', padding: '12px 14px',
+              background: '#060f20', border: `1px solid ${pinErr ? C.red : C.borderBlue}`,
+              borderRadius: 8, color: C.text, fontSize: 16,
+              fontFamily: font, marginBottom: 12, outline: 'none',
+            }}
+          />
+          {pinErr && <p style={{ color: C.red, fontSize: 12, marginBottom: 12 }}>{pinErr}</p>}
+          <Btn onClick={handleUnlock} style={{ width: '100%' }}>Unlock</Btn>
+        </div>
+      </div>
+    )
+  }
 
   const groupMatches = getGroupMatches(activeGroup)
-  const totalFilled = ALL_MATCHES.filter(m => {
-    if (LOCKED_IDS.includes(m.id)) return true
-    const p = picks[m.id]
-    return p?.home != null && p?.away != null
-  }).length
 
   return (
     <div>
-      <div style={{
-        background: C.surface, borderRadius: 10, padding: '14px 16px',
-        border: `1px solid ${C.border}`, marginBottom: 20,
-      }}>
-        <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: C.textMuted, letterSpacing: 1, marginBottom: 8 }}>
-          VIEWING PICKS FOR
-        </label>
-        {loading ? (
-          <p style={{ color: C.textMuted, fontSize: 13 }}>Loading players…</p>
-        ) : (
-          <select
-            value={selectedPlayer}
-            onChange={e => setSelectedPlayer(e.target.value)}
-            style={{
-              width: '100%', padding: '10px 12px',
-              background: '#060f20', border: `1px solid ${C.borderBlue}`,
-              borderRadius: 8, color: C.text, fontSize: 15,
-              fontFamily: font, fontWeight: 700, cursor: 'pointer',
-            }}
-          >
-            {players.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>
-        )}
-        <div style={{ marginTop: 10, fontSize: 11, color: C.textMuted }}>
-          {totalFilled} / {ALL_MATCHES.length} picks entered
-        </div>
+      <div style={{ fontSize: 11, letterSpacing: 2, color: C.textMuted, fontWeight: 800, marginBottom: 16 }}>
+        ⚙️ ENTER MATCH RESULTS
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 20 }}>
-        {groupKeys.map(g => (
-          <button key={g} onClick={() => setActiveGroup(g)} style={{
-            padding: '6px 12px', borderRadius: 8, border: 'none',
-            cursor: 'pointer', fontWeight: 800, fontSize: 13,
-            background: activeGroup === g ? C.blue : C.surface,
-            color: activeGroup === g ? '#fff' : C.textMuted,
-            outline: activeGroup === g ? `2px solid ${C.blueBright}` : 'none',
-            outlineOffset: 1, fontFamily: font,
-          }}>
-            {g}
-          </button>
-        ))}
+        {groupKeys.map(g => {
+          const ms = getGroupMatches(g)
+          const done = ms.filter(m => results[m.id] != null).length
+          const allDone = done === ms.length
+          return (
+            <button key={g} onClick={() => setActiveGroup(g)} style={{
+              padding: '6px 12px', borderRadius: 8, border: 'none',
+              cursor: 'pointer', fontWeight: 800, fontSize: 13,
+              background: activeGroup === g
+                ? C.blue
+                : allDone ? 'rgba(0,230,118,0.12)' : C.surface,
+              color: activeGroup === g ? '#fff' : allDone ? C.green : C.textMuted,
+              outline: activeGroup === g ? `2px solid ${C.blueBright}` : 'none',
+              outlineOffset: 1, fontFamily: font, position: 'relative',
+            }}>
+              {g}
+              {allDone && activeGroup !== g && (
+                <span style={{
+                  position: 'absolute', top: -3, right: -3,
+                  width: 8, height: 8, borderRadius: 99,
+                  background: C.green, border: `1px solid ${C.bg}`,
+                }} />
+              )}
+            </button>
+          )
+        })}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
@@ -576,41 +605,46 @@ function AdminTab() {
       </div>
 
       {groupMatches.map(m => {
-        const pick = picks[m.id]
-        const result = COMPLETED[m.id]
-        const hasPick = pick?.home != null && pick?.away != null
-        let badge = null
-        if (result && hasPick) {
-          const pts = scoreGroupPick(pick, result)
-          badge = <PtsBadge pts={pts} maxPts={POINTS.GROUP_CORRECT + POINTS.GROUP_EXACT_BONUS} />
-        }
+        const home = getScore(m.id, 'home')
+        const away = getScore(m.id, 'away')
+        const isDirty = draft[m.id] !== undefined
+        const isSaving = saving[m.id]
+        const hasSaved = results[m.id] != null && !isDirty
         return (
           <div key={m.id} style={{
-            background: 'rgba(255,255,255,0.025)', border: `1px solid ${C.border}`,
+            background: hasSaved ? 'rgba(0,230,118,0.04)' : 'rgba(255,255,255,0.025)',
+            border: `1px solid ${hasSaved ? 'rgba(0,230,118,0.2)' : isDirty ? C.borderBlue : C.border}`,
             borderRadius: 10, padding: '10px 12px', marginBottom: 8,
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <span style={{ fontSize: 10, color: C.green, fontWeight: 800, letterSpacing: 1 }}>
-                MATCHDAY {m.md}
+              <span style={{ fontSize: 10, color: C.textMuted, fontWeight: 800, letterSpacing: 1 }}>
+                {m.id} · MD{m.md}
               </span>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                {result && <span style={{ fontSize: 10, color: C.green }}>RESULT: {result.home}–{result.away}</span>}
-                {badge}
-              </div>
+              {hasSaved && (
+                <span style={{ fontSize: 10, color: C.green, fontWeight: 700 }}>SAVED ✓</span>
+              )}
+              {isDirty && (
+                <span style={{ fontSize: 10, color: C.amber, fontWeight: 700 }}>UNSAVED</span>
+              )}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ flex: 1, fontSize: 13, color: C.text, lineHeight: 1.3 }}>{m.home}</span>
-              <div style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                gap: 6, flexShrink: 0, minWidth: 80,
-                background: '#060f20', border: `1px solid ${C.textDim}`,
-                borderRadius: 6, padding: '5px 14px',
-                fontSize: 18, fontWeight: 700,
-                color: hasPick ? C.text : C.textDim,
-              }}>
-                {hasPick ? `${pick.home} – ${pick.away}` : '· – ·'}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                <ScoreInput value={home} onChange={v => setScore(m.id, 'home', v)} />
+                <span style={{ color: C.textDim, fontWeight: 700, fontSize: 14 }}>–</span>
+                <ScoreInput value={away} onChange={v => setScore(m.id, 'away', v)} />
               </div>
               <span style={{ flex: 1, fontSize: 13, color: C.text, textAlign: 'right', lineHeight: 1.3 }}>{m.away}</span>
+            </div>
+            <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
+              <Btn
+                onClick={() => saveMatch(m.id)}
+                disabled={isSaving || (home == null || away == null)}
+                variant={isDirty ? 'primary' : 'ghost'}
+                style={{ padding: '7px 16px', fontSize: 12 }}
+              >
+                {isSaving ? 'Saving…' : 'Save Result'}
+              </Btn>
             </div>
           </div>
         )
@@ -624,6 +658,15 @@ function AdminTab() {
 export default function App() {
   const [player, setPlayer] = useState(() => localStorage.getItem('wc2026_player') || null)
   const [tab, setTab] = useState('picks')
+  const [results, setResults] = useState({})
+
+  useEffect(() => {
+    fetchResults().then(setResults)
+  }, [])
+
+  function handleRefreshResults() {
+    fetchResults().then(setResults)
+  }
 
   function handleLogin(name) {
     localStorage.setItem('wc2026_player', name)
@@ -636,8 +679,6 @@ export default function App() {
   }
 
   if (!player) return <LoginScreen onLogin={handleLogin} />
-
-  const pts = 0 // real-time pts shown in scoreboard
 
   return (
     <div style={{
@@ -670,7 +711,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* Content area with full background image */}
+      {/* Content area */}
       <div style={{
         position: 'relative',
         backgroundImage: `url(https://i.imgur.com/vk7aIFj.jpeg)`,
@@ -685,11 +726,11 @@ export default function App() {
         }} />
         <div style={{ maxWidth: 640, margin: '0 auto', padding: '20px 16px 80px', position: 'relative', zIndex: 1 }}>
           {tab === 'picks' ? (
-            <PicksTab playerName={player} />
-          ) : tab === 'admin' ? (
-            <AdminTab />
+            <PicksTab playerName={player} results={results} />
+          ) : tab === 'scores' ? (
+            <Scoreboard currentPlayer={player} results={results} />
           ) : (
-            <Scoreboard currentPlayer={player} />
+            <AdminPanel results={results} onRefresh={handleRefreshResults} />
           )}
         </div>
       </div>
@@ -703,7 +744,7 @@ export default function App() {
         {[
           { id: 'picks', label: '🗳️ My Picks' },
           { id: 'scores', label: '🏆 Scoreboard' },
-          ...(player === 'Dhino' ? [{ id: 'admin', label: '👁️ Admin' }] : []),
+          { id: 'admin', label: '⚙️ Admin' },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} style={{
             flex: 1, padding: '14px 0', border: 'none', cursor: 'pointer',
