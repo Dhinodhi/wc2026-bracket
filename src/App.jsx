@@ -477,9 +477,18 @@ function AdminPanel({ results, onRefresh }) {
   const [pin, setPin] = useState('')
   const [unlocked, setUnlocked] = useState(false)
   const [pinErr, setPinErr] = useState('')
+  const [adminView, setAdminView] = useState('results')
+
+  // Results entry state
   const [activeGroup, setActiveGroup] = useState('A')
   const [draft, setDraft] = useState({})
   const [saving, setSaving] = useState({})
+
+  // All picks view state
+  const [allPlayers, setAllPlayers] = useState([])
+  const [allPicks, setAllPicks] = useState({})
+  const [picksLoading, setPicksLoading] = useState(false)
+
   const groupKeys = Object.keys(GROUPS)
 
   function handleUnlock() {
@@ -491,16 +500,36 @@ function AdminPanel({ results, onRefresh }) {
     }
   }
 
+  useEffect(() => {
+    if (!unlocked || adminView !== 'picks') return
+    let cancelled = false
+    async function loadAllPicks() {
+      setPicksLoading(true)
+      const { data: players } = await supabase.from('players').select('name').order('name')
+      if (cancelled || !players) { setPicksLoading(false); return }
+      const names = players.map(p => p.name)
+      const { data: picksData } = await supabase.from('picks').select('player_name, match_id, home, away')
+      if (cancelled) return
+      const map = {}
+      names.forEach(n => { map[n] = {} })
+      ;(picksData || []).forEach(r => {
+        if (map[r.player_name]) map[r.player_name][r.match_id] = { home: r.home, away: r.away }
+      })
+      setAllPlayers(names)
+      setAllPicks(map)
+      setPicksLoading(false)
+    }
+    loadAllPicks()
+    return () => { cancelled = true }
+  }, [unlocked, adminView])
+
   function getScore(matchId, side) {
     if (draft[matchId]?.[side] !== undefined) return draft[matchId][side]
     return results[matchId]?.[side] ?? null
   }
 
   function setScore(matchId, side, val) {
-    setDraft(prev => ({
-      ...prev,
-      [matchId]: { ...prev[matchId], [side]: val },
-    }))
+    setDraft(prev => ({ ...prev, [matchId]: { ...prev[matchId], [side]: val } }))
   }
 
   async function saveMatch(matchId) {
@@ -519,10 +548,7 @@ function AdminPanel({ results, onRefresh }) {
 
   if (!unlocked) {
     return (
-      <div style={{
-        display: 'flex', flexDirection: 'column', alignItems: 'center',
-        paddingTop: 48,
-      }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 48 }}>
         <div style={{ fontSize: 32, marginBottom: 12 }}>🔒</div>
         <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 24, textAlign: 'center' }}>
           Enter the admin PIN to manage match results
@@ -554,13 +580,129 @@ function AdminPanel({ results, onRefresh }) {
     )
   }
 
-  const groupMatches = getGroupMatches(activeGroup)
+  const viewToggle = (
+    <div style={{ display: 'flex', gap: 6, marginBottom: 20 }}>
+      {[
+        { id: 'results', label: 'Enter Results' },
+        { id: 'picks', label: 'View All Picks' },
+      ].map(v => (
+        <button key={v.id} onClick={() => setAdminView(v.id)} style={{
+          flex: 1, padding: '10px 0', borderRadius: 8, border: 'none',
+          cursor: 'pointer', fontWeight: 700, fontSize: 13, fontFamily: font,
+          background: adminView === v.id ? C.blue : C.surface,
+          color: adminView === v.id ? '#fff' : C.textMuted,
+          outline: adminView === v.id ? `2px solid ${C.blueBright}` : 'none',
+          outlineOffset: 1,
+        }}>
+          {v.label}
+        </button>
+      ))}
+    </div>
+  )
 
+  if (adminView === 'picks') {
+    const sn = t => t.split(' ').slice(1).join(' ')
+    return (
+      <div>
+        {viewToggle}
+        {picksLoading ? (
+          <p style={{ color: C.textMuted, fontSize: 13 }}>Loading picks…</p>
+        ) : (
+          <div style={{ overflowX: 'auto', borderRadius: 8, border: `1px solid ${C.border}` }}>
+            <table style={{ borderCollapse: 'collapse', fontSize: 12, width: '100%' }}>
+              <thead>
+                <tr style={{ background: C.surfaceHi }}>
+                  <th style={{
+                    position: 'sticky', left: 0, zIndex: 1,
+                    background: C.surfaceHi, padding: '8px 10px',
+                    textAlign: 'left', fontWeight: 800, fontSize: 10,
+                    color: C.textMuted, letterSpacing: 1,
+                    borderBottom: `1px solid ${C.border}`,
+                    borderRight: `1px solid ${C.border}`,
+                    whiteSpace: 'nowrap', minWidth: 140,
+                  }}>
+                    MATCH
+                  </th>
+                  {allPlayers.map(p => (
+                    <th key={p} style={{
+                      padding: '8px 8px', textAlign: 'center',
+                      fontWeight: 700, fontSize: 11, color: C.blueLight,
+                      borderBottom: `1px solid ${C.border}`,
+                      borderRight: `1px solid ${C.border}`,
+                      whiteSpace: 'nowrap', minWidth: 64,
+                    }}>
+                      {p.length > 8 ? p.slice(0, 7) + '…' : p}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {groupKeys.map(g => {
+                  const matches = getGroupMatches(g).filter(m => !LOCKED_IDS.includes(m.id))
+                  if (matches.length === 0) return null
+                  return [
+                    <tr key={`hdr-${g}`} style={{ background: 'rgba(21,101,192,0.12)' }}>
+                      <td
+                        colSpan={1 + allPlayers.length}
+                        style={{
+                          padding: '5px 10px', fontSize: 10, fontWeight: 800,
+                          color: C.blueLight, letterSpacing: 2,
+                          borderBottom: `1px solid ${C.border}`,
+                        }}
+                      >
+                        GROUP {g}
+                      </td>
+                    </tr>,
+                    ...matches.map((m, mi) => (
+                      <tr key={m.id} style={{ background: mi % 2 === 0 ? C.surface : C.surfaceHi }}>
+                        <td style={{
+                          position: 'sticky', left: 0, zIndex: 1,
+                          background: mi % 2 === 0 ? C.surface : C.surfaceHi,
+                          padding: '7px 10px',
+                          borderBottom: `1px solid ${C.border}`,
+                          borderRight: `1px solid ${C.border}`,
+                          whiteSpace: 'nowrap',
+                        }}>
+                          <span style={{ fontWeight: 800, color: C.textMuted, fontSize: 10, marginRight: 6 }}>
+                            {m.id}
+                          </span>
+                          <span style={{ color: C.text, fontSize: 11 }}>
+                            {sn(m.home)} · {sn(m.away)}
+                          </span>
+                        </td>
+                        {allPlayers.map(p => {
+                          const pick = allPicks[p]?.[m.id]
+                          const hasPick = pick?.home != null && pick?.away != null
+                          return (
+                            <td key={p} style={{
+                              padding: '7px 8px', textAlign: 'center',
+                              borderBottom: `1px solid ${C.border}`,
+                              borderRight: `1px solid ${C.border}`,
+                              color: hasPick ? C.text : C.textDim,
+                              fontWeight: hasPick ? 700 : 400,
+                              fontSize: 12, whiteSpace: 'nowrap',
+                            }}>
+                              {hasPick ? `${pick.home} – ${pick.away}` : '–'}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    )),
+                  ]
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // Results entry view
+  const groupMatches = getGroupMatches(activeGroup)
   return (
     <div>
-      <div style={{ fontSize: 11, letterSpacing: 2, color: C.textMuted, fontWeight: 800, marginBottom: 16 }}>
-        ⚙️ ENTER MATCH RESULTS
-      </div>
+      {viewToggle}
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 20 }}>
         {groupKeys.map(g => {
@@ -620,12 +762,8 @@ function AdminPanel({ results, onRefresh }) {
               <span style={{ fontSize: 10, color: C.textMuted, fontWeight: 800, letterSpacing: 1 }}>
                 {m.id} · MD{m.md}
               </span>
-              {hasSaved && (
-                <span style={{ fontSize: 10, color: C.green, fontWeight: 700 }}>SAVED ✓</span>
-              )}
-              {isDirty && (
-                <span style={{ fontSize: 10, color: C.amber, fontWeight: 700 }}>UNSAVED</span>
-              )}
+              {hasSaved && <span style={{ fontSize: 10, color: C.green, fontWeight: 700 }}>SAVED ✓</span>}
+              {isDirty && <span style={{ fontSize: 10, color: C.amber, fontWeight: 700 }}>UNSAVED</span>}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ flex: 1, fontSize: 13, color: C.text, lineHeight: 1.3 }}>{m.home}</span>
