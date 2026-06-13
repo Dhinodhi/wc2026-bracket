@@ -389,7 +389,7 @@ function PicksTab({ playerName, results }) {
 
       <div style={{ marginBottom: 20 }}>
         <button
-          onClick={() => generateBracketPDF(playerName, picks)}
+          onClick={() => generateBracketPDF(playerName, picks, results)}
           style={{
             width: '100%', padding: '11px 0',
             background: 'rgba(0,230,118,0.1)',
