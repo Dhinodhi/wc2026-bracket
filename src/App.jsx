@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { supabase } from './supabase'
 import {
   GROUPS, getGroupMatches, ALL_MATCHES,
-  LOCKED_IDS, POINTS, scoreGroupPick, calcTotal
+  LOCKED_IDS, POINTS, scoreGroupPick, calcTotal, MATCH_TIMES
 } from './data'
 import { generateBracketPDF } from './generatePDF'
 
@@ -198,9 +198,16 @@ function MatchCard({ match, pick, onPick, results }) {
       borderRadius: 10, padding: '10px 12px', marginBottom: 8,
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <span style={{ fontSize: 10, color: C.green, fontWeight: 800, letterSpacing: 1 }}>
-          MATCHDAY {match.md}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 10, color: C.green, fontWeight: 800, letterSpacing: 1 }}>
+            MATCHDAY {match.md}
+          </span>
+          {MATCH_TIMES[match.id] && (
+            <span style={{ fontSize: 9, color: C.textDim }}>
+              {new Date(MATCH_TIMES[match.id]).toLocaleString('en-US', { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+            </span>
+          )}
+        </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           {result && <span style={{ fontSize: 10, color: C.green }}>RESULT: {result.home}–{result.away}</span>}
           {badge}
@@ -669,10 +676,17 @@ function AdminPanel({ results, onRefresh }) {
                           <span style={{ color: C.text, fontSize: 11 }}>
                             {sn(m.home)} · {sn(m.away)}
                           </span>
+                          {results[m.id] && (
+                            <span style={{ color: C.green, fontSize: 10, marginLeft: 4 }}>
+                              ({results[m.id].home}–{results[m.id].away})
+                            </span>
+                          )}
                         </td>
                         {allPlayers.map(p => {
                           const pick = allPicks[p]?.[m.id]
                           const hasPick = pick?.home != null && pick?.away != null
+                          const result = results[m.id]
+                          const pts = (hasPick && result) ? scoreGroupPick(pick, result) : null
                           return (
                             <td key={p} style={{
                               padding: '7px 8px', textAlign: 'center',
@@ -683,6 +697,17 @@ function AdminPanel({ results, onRefresh }) {
                               fontSize: 12, whiteSpace: 'nowrap',
                             }}>
                               {hasPick ? `${pick.home} – ${pick.away}` : '–'}
+                              {pts !== null && (
+                                <span style={{
+                                  display: 'inline-block', marginLeft: 4,
+                                  padding: '1px 4px', borderRadius: 99,
+                                  fontSize: 9, fontWeight: 800,
+                                  background: pts === 5 ? C.green : pts > 0 ? C.amber : C.red,
+                                  color: pts === 5 ? C.greenDark : pts > 0 ? '#1a1000' : '#fff',
+                                }}>
+                                  {pts}
+                                </span>
+                              )}
                             </td>
                           )
                         })}
