@@ -203,7 +203,7 @@ function MatchCard({ match, pick, onPick, results }) {
             MATCHDAY {match.md}
           </span>
           {MATCH_TIMES[match.id] && (
-            <span style={{ fontSize: 9, color: C.textDim }}>
+            <span style={{ fontSize: 9, color: C.gold }}>
               {new Date(MATCH_TIMES[match.id]).toLocaleString('en-US', { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
             </span>
           )}
@@ -220,7 +220,7 @@ function MatchCard({ match, pick, onPick, results }) {
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
           <ScoreInput value={h} onChange={v => onPick(match.id, { home: v, away: a ?? null })} disabled={locked} />
-          <span style={{ color: C.textDim, fontWeight: 700, fontSize: 14 }}>–</span>
+          <span style={{ color: C.gold, fontWeight: 700, fontSize: 14 }}>–</span>
           <ScoreInput value={a} onChange={v => onPick(match.id, { home: h ?? null, away: v })} disabled={locked} />
         </div>
         <span style={{ flex: 1, fontSize: 13, color: locked ? C.textMuted : C.text, textAlign: 'right', lineHeight: 1.3 }}>
