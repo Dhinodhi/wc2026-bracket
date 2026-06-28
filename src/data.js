@@ -49,7 +49,7 @@ export function scoreGroupPick(pick, result) {
   return POINTS.GROUP_CORRECT + (exact ? POINTS.GROUP_EXACT_BONUS : 0)
 }
 
-export function calcTotal(picks, results, knockoutPicks, knockoutResults) {
+export function calcTotal(picks, results, knockoutPicks, knockoutResults, finalPick, finalResult) {
   let total = 0
   ALL_MATCHES.forEach((m) => {
     const pick = picks?.[m.id]
@@ -60,6 +60,7 @@ export function calcTotal(picks, results, knockoutPicks, knockoutResults) {
     }
   })
   total += calcKnockoutTotal(knockoutPicks, knockoutResults)
+  if (finalPick && finalResult) total += scoreFinalPick(finalPick, finalResult)
   return total
 }
 
@@ -104,7 +105,7 @@ export const MATCH_TIMES = {
 
 export const KNOCKOUT_SCHEDULE = {
   // ── ROUND OF 32 ──
-  R32_1:  { label: 'Round of 32', home: 'South Africa', away: 'Canada',       time: '2026-06-28T22:00:00Z', venue: 'SoFi Stadium, Los Angeles' },
+  R32_1:  { label: 'Round of 32', home: 'South Africa', away: 'Canada',       time: '2026-06-28T19:00:00Z', venue: 'SoFi Stadium, Los Angeles' },
   R32_2:  { label: 'Round of 32', home: 'Brazil',       away: 'Japan',        time: '2026-06-29T17:00:00Z', venue: 'NRG Stadium, Houston' },
   R32_3:  { label: 'Round of 32', home: 'Germany',      away: 'Paraguay',     time: '2026-06-29T20:30:00Z', venue: 'Gillette Stadium, Foxborough' },
   R32_4:  { label: 'Round of 32', home: 'Netherlands',  away: 'Morocco',      time: '2026-06-30T01:00:00Z', venue: 'Estadio BBVA, Monterrey' },
@@ -146,6 +147,57 @@ export const KNOCKOUT_SCHEDULE = {
 }
 
 export const KNOCKOUT_ROUNDS = ['Round of 32', 'Round of 16', 'Quarterfinal', 'Semifinal', 'Third Place']
+
+export const TEAM_FLAGS = {
+  'South Africa': '🇿🇦', 'Canada': '🇨🇦', 'Brazil': '🇧🇷', 'Japan': '🇯🇵',
+  'Germany': '🇩🇪', 'Paraguay': '🇵🇾', 'Netherlands': '🇳🇱', 'Morocco': '🇲🇦',
+  'Ivory Coast': '🇨🇮', 'Norway': '🇳🇴', 'France': '🇫🇷', 'Sweden': '🇸🇪',
+  'Mexico': '🇲🇽', 'Ecuador': '🇪🇨', 'England': '🏴󠁧󠁢󠁥󠁮󠁧󠁿', 'DR Congo': '🇨🇩',
+  'Belgium': '🇧🇪', 'Senegal': '🇸🇳', 'USA': '🇺🇸', 'Bosnia-Herz.': '🇧🇦',
+  'Spain': '🇪🇸', 'Austria': '🇦🇹', 'Portugal': '🇵🇹', 'Croatia': '🇭🇷',
+  'Switzerland': '🇨🇭', 'Algeria': '🇩🇿', 'Australia': '🇦🇺', 'Egypt': '🇪🇬',
+  'Argentina': '🇦🇷', 'Cape Verde': '🇨🇻', 'Colombia': '🇨🇴', 'Ghana': '🇬🇭',
+}
+
+export function withFlag(teamName) {
+  if (!teamName || teamName === 'TBD') return teamName
+  const flag = TEAM_FLAGS[teamName]
+  return flag ? `${flag} ${teamName}` : teamName
+}
+
+export const FINAL_MATCH = {
+  id: 'FINAL',
+  time: '2026-07-19T19:00:00Z',
+  venue: 'MetLife Stadium, East Rutherford, NJ',
+}
+
+export const FINAL_POINTS = {
+  WINNER: 5,
+  FINAL_SCORE: 5,
+  HALFTIME_SCORE: 5,
+  TOTAL_GOALS: 3,
+  YELLOW_CARDS: 2,
+}
+
+export function scoreFinalPick(pick, result) {
+  if (!pick || !result) return 0
+  let total = 0
+  // Winner (who lifted the trophy — winner of the match including ET/penalties)
+  if (pick.winner && result.winner && pick.winner === result.winner) total += FINAL_POINTS.WINNER
+  // Exact final score (after 90 min or ET)
+  if (pick.finalHome != null && pick.finalAway != null &&
+      pick.finalHome === result.finalHome && pick.finalAway === result.finalAway) total += FINAL_POINTS.FINAL_SCORE
+  // Exact halftime score
+  if (pick.htHome != null && pick.htAway != null &&
+      pick.htHome === result.htHome && pick.htAway === result.htAway) total += FINAL_POINTS.HALFTIME_SCORE
+  // Total goals (exact)
+  if (pick.totalGoals != null && result.totalGoals != null &&
+      pick.totalGoals === result.totalGoals) total += FINAL_POINTS.TOTAL_GOALS
+  // Total yellow cards (exact)
+  if (pick.yellowCards != null && result.yellowCards != null &&
+      pick.yellowCards === result.yellowCards) total += FINAL_POINTS.YELLOW_CARDS
+  return total
+}
 
 export const POINTS_KNOCKOUT = {
   CORRECT: 5,

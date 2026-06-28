@@ -2,6 +2,8 @@
 // knockout_matchups: match_id TEXT PRIMARY KEY, home TEXT, away TEXT, updated_at TIMESTAMPTZ DEFAULT NOW()
 // knockout_picks: player_name TEXT, match_id TEXT, home INT, away INT, updated_at TIMESTAMPTZ DEFAULT NOW(), PRIMARY KEY (player_name, match_id)
 // knockout_results: match_id TEXT PRIMARY KEY, home INT, away INT, updated_at TIMESTAMPTZ DEFAULT NOW()
+// final_picks: player_name TEXT REFERENCES players(name), winner TEXT, final_home INT, final_away INT, ht_home INT, ht_away INT, total_goals INT, yellow_cards INT, PRIMARY KEY (player_name)
+// final_result: id TEXT PRIMARY KEY DEFAULT 'FINAL', winner TEXT, final_home INT, final_away INT, ht_home INT, ht_away INT, total_goals INT, yellow_cards INT
 
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from './supabase'
@@ -9,6 +11,7 @@ import {
   GROUPS, getGroupMatches, ALL_MATCHES,
   LOCKED_IDS, POINTS, scoreGroupPick, calcTotal, MATCH_TIMES,
   KNOCKOUT_SCHEDULE, KNOCKOUT_ROUNDS, POINTS_KNOCKOUT, scoreKnockoutPick, calcKnockoutTotal,
+  TEAM_FLAGS, withFlag, FINAL_MATCH, FINAL_POINTS, scoreFinalPick,
 } from './data'
 import { generateBracketPDF } from './generatePDF'
 
@@ -59,6 +62,29 @@ async function fetchKnockoutData() {
   const matchupsMap = {}
   ;(matchups || []).forEach(r => { matchupsMap[r.match_id] = { home: r.home, away: r.away } })
   return { resultsMap, picksMap, matchupsMap }
+}
+
+async function fetchFinalData() {
+  const [{ data: result }, { data: picks }] = await Promise.all([
+    supabase.from('final_result').select('*').eq('id', 'FINAL').single(),
+    supabase.from('final_picks').select('*'),
+  ])
+  const picksMap = {}
+  ;(picks || []).forEach(r => {
+    picksMap[r.player_name] = {
+      winner: r.winner,
+      finalHome: r.final_home, finalAway: r.final_away,
+      htHome: r.ht_home, htAway: r.ht_away,
+      totalGoals: r.total_goals, yellowCards: r.yellow_cards,
+    }
+  })
+  const resultObj = result ? {
+    winner: result.winner,
+    finalHome: result.final_home, finalAway: result.final_away,
+    htHome: result.ht_home, htAway: result.ht_away,
+    totalGoals: result.total_goals, yellowCards: result.yellow_cards,
+  } : null
+  return { result: resultObj, picks: picksMap }
 }
 
 // ── SMALL COMPONENTS ───────────────────────────────────────────────────────
@@ -257,7 +283,7 @@ function MatchCard({ match, pick, onPick, results }) {
 
 // ── SCOREBOARD ─────────────────────────────────────────────────────────────
 
-function Scoreboard({ currentPlayer, results, knockoutResults, knockoutPicksAll }) {
+function Scoreboard({ currentPlayer, results, knockoutResults, knockoutPicksAll, finalPicks, finalResult }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
 
@@ -272,7 +298,7 @@ function Scoreboard({ currentPlayer, results, knockoutResults, knockoutPicksAll 
           .eq('player_name', name)
         const pickMap = {}
         ;(data || []).forEach(r => { pickMap[r.match_id] = { home: r.home, away: r.away } })
-        return { name, pts: calcTotal(pickMap, results, knockoutPicksAll?.[name] || {}, knockoutResults) }
+        return { name, pts: calcTotal(pickMap, results, knockoutPicksAll?.[name] || {}, knockoutResults, finalPicks?.[name] || null, finalResult) }
       }))
       scored.sort((a, b) => b.pts - a.pts)
       setRows(scored)
@@ -715,7 +741,7 @@ function AllPicksTab({ results, knockoutResults }) {
                                 {matchId}
                               </span>
                               <span style={{ color: C.text, fontSize: 11 }}>
-                                {schedule.home} · {schedule.away}
+                                {withFlag(schedule.home)} · {withFlag(schedule.away)}
                               </span>
                               {result && (
                                 <span style={{ color: C.green, fontSize: 10, marginLeft: 4 }}>
@@ -766,9 +792,198 @@ function AllPicksTab({ results, knockoutResults }) {
   )
 }
 
+// ── FINAL SECTION ──────────────────────────────────────────────────────────
+
+function FinalSection({ playerName, finalResult, knockoutMatchups, onRefresh }) {
+  const [pick, setPick] = useState({})
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    async function load() {
+      const { data } = await supabase
+        .from('final_picks')
+        .select('*')
+        .eq('player_name', playerName)
+        .single()
+      if (data) {
+        setPick({
+          winner: data.winner,
+          finalHome: data.final_home, finalAway: data.final_away,
+          htHome: data.ht_home, htAway: data.ht_away,
+          totalGoals: data.total_goals, yellowCards: data.yellow_cards,
+        })
+      }
+    }
+    load()
+  }, [playerName])
+
+  async function savePick(newPick) {
+    setSaving(true)
+    await supabase.from('final_picks').upsert({
+      player_name: playerName,
+      winner: newPick.winner ?? null,
+      final_home: newPick.finalHome ?? null,
+      final_away: newPick.finalAway ?? null,
+      ht_home: newPick.htHome ?? null,
+      ht_away: newPick.htAway ?? null,
+      total_goals: newPick.totalGoals ?? null,
+      yellow_cards: newPick.yellowCards ?? null,
+    }, { onConflict: 'player_name' })
+    setSaving(false)
+  }
+
+  function update(field, val) {
+    const newPick = { ...pick, [field]: val }
+    setPick(newPick)
+    savePick(newPick)
+  }
+
+  const finalMatchup = knockoutMatchups['FINAL']
+  const homeTeam = finalMatchup?.home && finalMatchup.home !== 'TBD' ? finalMatchup.home : null
+  const awayTeam = finalMatchup?.away && finalMatchup.away !== 'TBD' ? finalMatchup.away : null
+  const teamsKnown = !!(homeTeam && awayTeam)
+  const disabled = !!finalResult
+
+  const catPts = finalResult ? {
+    winner: (pick.winner && finalResult.winner && pick.winner === finalResult.winner) ? FINAL_POINTS.WINNER : 0,
+    finalScore: (pick.finalHome != null && pick.finalAway != null && pick.finalHome === finalResult.finalHome && pick.finalAway === finalResult.finalAway) ? FINAL_POINTS.FINAL_SCORE : 0,
+    htScore: (pick.htHome != null && pick.htAway != null && pick.htHome === finalResult.htHome && pick.htAway === finalResult.htAway) ? FINAL_POINTS.HALFTIME_SCORE : 0,
+    totalGoals: (pick.totalGoals != null && finalResult.totalGoals != null && pick.totalGoals === finalResult.totalGoals) ? FINAL_POINTS.TOTAL_GOALS : 0,
+    yellowCards: (pick.yellowCards != null && finalResult.yellowCards != null && pick.yellowCards === finalResult.yellowCards) ? FINAL_POINTS.YELLOW_CARDS : 0,
+  } : null
+  const totalFinalPts = catPts ? Object.values(catPts).reduce((s, v) => s + v, 0) : null
+
+  const inpStyle = (isDisabled) => ({
+    width: 52, textAlign: 'center',
+    background: isDisabled ? '#0a1628' : '#060f20',
+    border: `1px solid ${isDisabled ? C.textDim : C.borderBlue}`,
+    color: isDisabled ? C.textDim : C.text,
+    borderRadius: 6, padding: '5px 0',
+    fontSize: 18, fontWeight: 700, fontFamily: font,
+    WebkitAppearance: 'none', MozAppearance: 'textfield',
+  })
+
+  const rowSt = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: `1px solid rgba(255,214,0,0.15)` }
+  const ptColor = (pts) => pts > 0 ? C.green : C.red
+
+  const finalTime = new Date(FINAL_MATCH.time).toLocaleString('en-US', {
+    timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  }) + ' PT'
+
+  const winnerBtn = (team) => (
+    <button
+      key={team}
+      onClick={() => !disabled && update('winner', team)}
+      disabled={disabled}
+      style={{
+        padding: '5px 10px', borderRadius: 8, fontSize: 11, fontWeight: 700,
+        cursor: disabled ? 'default' : 'pointer', fontFamily: font,
+        background: pick.winner === team ? C.blue : C.surface,
+        color: pick.winner === team ? '#fff' : C.textMuted,
+        border: `1px solid ${pick.winner === team ? C.blue : C.border}`,
+        opacity: disabled ? 0.7 : 1,
+      }}
+    >
+      {withFlag(team)}
+    </button>
+  )
+
+  return (
+    <div style={{ marginTop: 24, background: 'rgba(255,214,0,0.04)', border: `2px solid rgba(255,214,0,0.25)`, borderRadius: 12, padding: 16 }}>
+      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 2, color: C.gold, marginBottom: 2 }}>
+        🏆 THE FINAL
+        {saving && <span style={{ color: C.textDim, marginLeft: 8, fontWeight: 400, fontSize: 10 }}>saving…</span>}
+      </div>
+      <div style={{ fontSize: 10, color: C.textMuted, marginBottom: 12 }}>{finalTime} · {FINAL_MATCH.venue}</div>
+      <div style={{ textAlign: 'center', fontSize: 14, fontWeight: 800, color: teamsKnown ? C.text : C.textDim, marginBottom: 16 }}>
+        {teamsKnown ? `${withFlag(homeTeam)} vs ${withFlag(awayTeam)}` : 'TBD vs TBD'}
+      </div>
+
+      {/* Winner */}
+      <div style={rowSt}>
+        <div style={{ fontSize: 12, color: C.textMuted, fontWeight: 700 }}>
+          Winner <span style={{ fontSize: 10, color: C.textDim }}>(+{FINAL_POINTS.WINNER})</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {teamsKnown ? (
+            <>{winnerBtn(homeTeam)}{winnerBtn(awayTeam)}</>
+          ) : (
+            <input type="text" value="" disabled placeholder="TBD"
+              style={{ padding: '5px 10px', background: '#0a1628', border: `1px solid ${C.textDim}`, borderRadius: 6, color: C.textDim, fontSize: 11, fontFamily: font, width: 100 }} />
+          )}
+          {catPts && <span style={{ fontSize: 11, fontWeight: 800, color: ptColor(catPts.winner), marginLeft: 4 }}>{catPts.winner > 0 ? `+${catPts.winner}` : '0'}</span>}
+        </div>
+      </div>
+
+      {/* Final Score */}
+      <div style={rowSt}>
+        <div style={{ fontSize: 12, color: C.textMuted, fontWeight: 700 }}>
+          Final Score <span style={{ fontSize: 10, color: C.textDim }}>(+{FINAL_POINTS.FINAL_SCORE})</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <ScoreInput value={pick.finalHome} onChange={v => update('finalHome', v)} disabled={disabled} />
+          <span style={{ color: C.gold, fontWeight: 700 }}>–</span>
+          <ScoreInput value={pick.finalAway} onChange={v => update('finalAway', v)} disabled={disabled} />
+          {catPts && <span style={{ fontSize: 11, fontWeight: 800, color: ptColor(catPts.finalScore), marginLeft: 4 }}>{catPts.finalScore > 0 ? `+${catPts.finalScore}` : '0'}</span>}
+        </div>
+      </div>
+
+      {/* Halftime Score */}
+      <div style={rowSt}>
+        <div style={{ fontSize: 12, color: C.textMuted, fontWeight: 700 }}>
+          Halftime Score <span style={{ fontSize: 10, color: C.textDim }}>(+{FINAL_POINTS.HALFTIME_SCORE})</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <ScoreInput value={pick.htHome} onChange={v => update('htHome', v)} disabled={disabled} />
+          <span style={{ color: C.gold, fontWeight: 700 }}>–</span>
+          <ScoreInput value={pick.htAway} onChange={v => update('htAway', v)} disabled={disabled} />
+          {catPts && <span style={{ fontSize: 11, fontWeight: 800, color: ptColor(catPts.htScore), marginLeft: 4 }}>{catPts.htScore > 0 ? `+${catPts.htScore}` : '0'}</span>}
+        </div>
+      </div>
+
+      {/* Total Goals */}
+      <div style={rowSt}>
+        <div style={{ fontSize: 12, color: C.textMuted, fontWeight: 700 }}>
+          Total Goals <span style={{ fontSize: 10, color: C.textDim }}>(+{FINAL_POINTS.TOTAL_GOALS})</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input type="number" min={0}
+            value={pick.totalGoals === undefined || pick.totalGoals === null ? '' : pick.totalGoals}
+            onChange={e => update('totalGoals', e.target.value === '' ? null : parseInt(e.target.value, 10))}
+            disabled={disabled} style={inpStyle(disabled)} />
+          {catPts && <span style={{ fontSize: 11, fontWeight: 800, color: ptColor(catPts.totalGoals), marginLeft: 4 }}>{catPts.totalGoals > 0 ? `+${catPts.totalGoals}` : '0'}</span>}
+        </div>
+      </div>
+
+      {/* Yellow Cards */}
+      <div style={{ ...rowSt, borderBottom: 'none' }}>
+        <div style={{ fontSize: 12, color: C.textMuted, fontWeight: 700 }}>
+          Yellow Cards <span style={{ fontSize: 10, color: C.textDim }}>(+{FINAL_POINTS.YELLOW_CARDS})</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input type="number" min={0}
+            value={pick.yellowCards === undefined || pick.yellowCards === null ? '' : pick.yellowCards}
+            onChange={e => update('yellowCards', e.target.value === '' ? null : parseInt(e.target.value, 10))}
+            disabled={disabled} style={inpStyle(disabled)} />
+          {catPts && <span style={{ fontSize: 11, fontWeight: 800, color: ptColor(catPts.yellowCards), marginLeft: 4 }}>{catPts.yellowCards > 0 ? `+${catPts.yellowCards}` : '0'}</span>}
+        </div>
+      </div>
+
+      {catPts && (
+        <div style={{ marginTop: 12, textAlign: 'right', fontSize: 13, fontWeight: 800, color: C.green }}>
+          Final total: +{totalFinalPts} pts
+        </div>
+      )}
+      <div style={{ marginTop: 6, fontSize: 10, color: C.textDim, textAlign: 'right' }}>
+        Max: +{FINAL_POINTS.WINNER + FINAL_POINTS.FINAL_SCORE + FINAL_POINTS.HALFTIME_SCORE + FINAL_POINTS.TOTAL_GOALS + FINAL_POINTS.YELLOW_CARDS} pts
+      </div>
+    </div>
+  )
+}
+
 // ── KNOCKOUT TAB ───────────────────────────────────────────────────────────
 
-function KnockoutTab({ playerName, knockoutResults, knockoutMatchups, onRefresh }) {
+function KnockoutTab({ playerName, knockoutResults, knockoutMatchups, finalResult, onRefresh }) {
   const [picks, setPicks] = useState({})
   const [saving, setSaving] = useState(false)
 
@@ -870,7 +1085,7 @@ function KnockoutTab({ playerName, knockoutResults, knockoutMatchups, onRefresh 
                   ) : (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span style={{ flex: 1, fontSize: 13, color: result ? C.textMuted : C.text, lineHeight: 1.3 }}>
-                        {home}
+                        {withFlag(home)}
                       </span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
                         <ScoreInput value={h} onChange={v => handlePick(matchId, { home: v, away: a ?? null })} disabled={!!result} />
@@ -878,7 +1093,7 @@ function KnockoutTab({ playerName, knockoutResults, knockoutMatchups, onRefresh 
                         <ScoreInput value={a} onChange={v => handlePick(matchId, { home: h ?? null, away: v })} disabled={!!result} />
                       </div>
                       <span style={{ flex: 1, fontSize: 13, color: result ? C.textMuted : C.text, textAlign: 'right', lineHeight: 1.3 }}>
-                        {away}
+                        {withFlag(away)}
                       </span>
                     </div>
                   )}
@@ -888,13 +1103,20 @@ function KnockoutTab({ playerName, knockoutResults, knockoutMatchups, onRefresh 
           </div>
         )
       })}
+
+      <FinalSection
+        playerName={playerName}
+        finalResult={finalResult}
+        knockoutMatchups={knockoutMatchups}
+        onRefresh={onRefresh}
+      />
     </div>
   )
 }
 
 // ── ADMIN PANEL ────────────────────────────────────────────────────────────
 
-function AdminPanel({ results, onRefresh, knockoutResults, knockoutMatchups, onRefreshKnockout }) {
+function AdminPanel({ results, onRefresh, knockoutResults, knockoutMatchups, onRefreshKnockout, finalResult, onRefreshFinal }) {
   const [pin, setPin] = useState('')
   const [unlocked, setUnlocked] = useState(false)
   const [pinErr, setPinErr] = useState('')
@@ -912,6 +1134,8 @@ function AdminPanel({ results, onRefresh, knockoutResults, knockoutMatchups, onR
   const [matchupDraft, setMatchupDraft] = useState({})
   const [resultDraft, setResultDraft] = useState({})
   const [knockoutSaving, setKnockoutSaving] = useState({})
+  const [finalResultDraft, setFinalResultDraft] = useState({})
+  const [finalResultSaving, setFinalResultSaving] = useState(false)
 
   const groupKeys = Object.keys(GROUPS)
 
@@ -972,6 +1196,31 @@ function AdminPanel({ results, onRefresh, knockoutResults, knockoutMatchups, onR
     setResultDraft(prev => { const next = { ...prev }; delete next[matchId]; return next })
     setKnockoutSaving(prev => ({ ...prev, [matchId]: false }))
     onRefreshKnockout()
+    onRefresh()
+  }
+
+  function getFinalResultVal(field) {
+    if (finalResultDraft[field] !== undefined) return finalResultDraft[field]
+    return finalResult?.[field] ?? null
+  }
+  function setFinalResultVal(field, val) {
+    setFinalResultDraft(prev => ({ ...prev, [field]: val }))
+  }
+  async function saveFinalResult() {
+    setFinalResultSaving(true)
+    await supabase.from('final_result').upsert({
+      id: 'FINAL',
+      winner: getFinalResultVal('winner'),
+      final_home: getFinalResultVal('finalHome'),
+      final_away: getFinalResultVal('finalAway'),
+      ht_home: getFinalResultVal('htHome'),
+      ht_away: getFinalResultVal('htAway'),
+      total_goals: getFinalResultVal('totalGoals'),
+      yellow_cards: getFinalResultVal('yellowCards'),
+    }, { onConflict: 'id' })
+    setFinalResultDraft({})
+    setFinalResultSaving(false)
+    onRefreshFinal()
     onRefresh()
   }
 
@@ -1092,6 +1341,7 @@ function AdminPanel({ results, onRefresh, knockoutResults, knockoutMatchups, onR
       <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
         <button style={toggleBtn(knockoutSubTab === 'matchups')} onClick={() => setKnockoutSubTab('matchups')}>Set Matchups</button>
         <button style={toggleBtn(knockoutSubTab === 'results')} onClick={() => setKnockoutSubTab('results')}>Enter Results</button>
+        <button style={toggleBtn(knockoutSubTab === 'final')} onClick={() => setKnockoutSubTab('final')}>Final</button>
       </div>
 
       {knockoutSubTab === 'matchups' && KNOCKOUT_ROUNDS.map(round => {
@@ -1174,13 +1424,13 @@ function AdminPanel({ results, onRefresh, knockoutResults, knockoutMatchups, onR
                     {isDirty && <span style={{ fontSize: 10, color: C.amber, fontWeight: 700 }}>UNSAVED</span>}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ flex: 1, fontSize: 13, color: C.text, lineHeight: 1.3 }}>{matchup?.home}</span>
+                    <span style={{ flex: 1, fontSize: 13, color: C.text, lineHeight: 1.3 }}>{withFlag(matchup?.home)}</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
                       <ScoreInput value={home} onChange={v => setKnockoutScore(matchId, 'home', v)} />
                       <span style={{ color: C.textDim, fontWeight: 700, fontSize: 14 }}>–</span>
                       <ScoreInput value={away} onChange={v => setKnockoutScore(matchId, 'away', v)} />
                     </div>
-                    <span style={{ flex: 1, fontSize: 13, color: C.text, textAlign: 'right', lineHeight: 1.3 }}>{matchup?.away}</span>
+                    <span style={{ flex: 1, fontSize: 13, color: C.text, textAlign: 'right', lineHeight: 1.3 }}>{withFlag(matchup?.away)}</span>
                   </div>
                   <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
                     <Btn onClick={() => saveKnockoutResult(matchId)} disabled={isSaving || (home == null || away == null)} variant={isDirty ? 'primary' : 'ghost'} style={{ padding: '7px 16px', fontSize: 12 }}>
@@ -1193,6 +1443,87 @@ function AdminPanel({ results, onRefresh, knockoutResults, knockoutMatchups, onR
           </div>
         )
       })}
+
+      {knockoutSubTab === 'final' && (
+        <div>
+          {/* Set Finalists */}
+          <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 2, color: C.gold, padding: '8px 0 6px', borderBottom: `1px solid rgba(255,214,0,0.2)`, marginBottom: 12 }}>
+            SET FINALISTS
+          </div>
+          <div style={{
+            background: 'rgba(255,255,255,0.025)',
+            border: `1px solid ${matchupDraft['FINAL'] !== undefined ? C.borderBlue : C.border}`,
+            borderRadius: 10, padding: '10px 12px', marginBottom: 20,
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ fontSize: 10, color: C.textMuted, fontWeight: 800, letterSpacing: 1 }}>FINAL</span>
+              {knockoutMatchups['FINAL']?.home && knockoutMatchups['FINAL']?.away && !matchupDraft['FINAL'] && (
+                <span style={{ fontSize: 10, color: C.green, fontWeight: 700 }}>SET ✓</span>
+              )}
+              {matchupDraft['FINAL'] && <span style={{ fontSize: 10, color: C.amber, fontWeight: 700 }}>UNSAVED</span>}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="text" value={getMatchupVal('FINAL', 'home')} onChange={e => setMatchupVal('FINAL', 'home', e.target.value)} placeholder="Home team"
+                style={{ flex: 1, padding: '8px 10px', background: '#060f20', border: `1px solid ${C.borderBlue}`, borderRadius: 6, color: C.text, fontSize: 13, fontFamily: font }} />
+              <span style={{ color: C.textDim, fontWeight: 700 }}>vs</span>
+              <input type="text" value={getMatchupVal('FINAL', 'away')} onChange={e => setMatchupVal('FINAL', 'away', e.target.value)} placeholder="Away team"
+                style={{ flex: 1, padding: '8px 10px', background: '#060f20', border: `1px solid ${C.borderBlue}`, borderRadius: 6, color: C.text, fontSize: 13, fontFamily: font }} />
+            </div>
+            <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
+              <Btn onClick={() => saveMatchup('FINAL')} disabled={knockoutSaving['FINAL'] || !getMatchupVal('FINAL', 'home') || !getMatchupVal('FINAL', 'away')} variant={matchupDraft['FINAL'] ? 'primary' : 'ghost'} style={{ padding: '7px 16px', fontSize: 12 }}>
+                {knockoutSaving['FINAL'] ? 'Saving…' : 'Save Finalists'}
+              </Btn>
+            </div>
+          </div>
+
+          {/* Enter Final Result */}
+          <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 2, color: C.gold, padding: '8px 0 6px', borderBottom: `1px solid rgba(255,214,0,0.2)`, marginBottom: 12 }}>
+            ENTER FINAL RESULT
+          </div>
+          <div style={{
+            background: (finalResult && Object.keys(finalResultDraft).length === 0) ? 'rgba(0,230,118,0.04)' : 'rgba(255,255,255,0.025)',
+            border: `1px solid ${Object.keys(finalResultDraft).length > 0 ? C.borderBlue : finalResult ? 'rgba(0,230,118,0.2)' : C.border}`,
+            borderRadius: 10, padding: '12px 14px',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 700, minWidth: 110 }}>Winner</span>
+              <input type="text" value={getFinalResultVal('winner') || ''} onChange={e => setFinalResultVal('winner', e.target.value || null)} placeholder="Team name"
+                style={{ flex: 1, maxWidth: 200, padding: '7px 10px', background: '#060f20', border: `1px solid ${C.borderBlue}`, borderRadius: 6, color: C.text, fontSize: 13, fontFamily: font }} />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 700, minWidth: 110 }}>Final Score</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <ScoreInput value={getFinalResultVal('finalHome')} onChange={v => setFinalResultVal('finalHome', v)} />
+                <span style={{ color: C.textDim, fontWeight: 700 }}>–</span>
+                <ScoreInput value={getFinalResultVal('finalAway')} onChange={v => setFinalResultVal('finalAway', v)} />
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 700, minWidth: 110 }}>Halftime</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <ScoreInput value={getFinalResultVal('htHome')} onChange={v => setFinalResultVal('htHome', v)} />
+                <span style={{ color: C.textDim, fontWeight: 700 }}>–</span>
+                <ScoreInput value={getFinalResultVal('htAway')} onChange={v => setFinalResultVal('htAway', v)} />
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 700, minWidth: 110 }}>Total Goals</span>
+              <input type="number" min={0} value={getFinalResultVal('totalGoals') ?? ''} onChange={e => setFinalResultVal('totalGoals', e.target.value === '' ? null : parseInt(e.target.value, 10))}
+                style={{ width: 52, textAlign: 'center', background: '#060f20', border: `1px solid ${C.borderBlue}`, color: C.text, borderRadius: 6, padding: '5px 0', fontSize: 18, fontWeight: 700, fontFamily: font, WebkitAppearance: 'none', MozAppearance: 'textfield' }} />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 700, minWidth: 110 }}>Yellow Cards</span>
+              <input type="number" min={0} value={getFinalResultVal('yellowCards') ?? ''} onChange={e => setFinalResultVal('yellowCards', e.target.value === '' ? null : parseInt(e.target.value, 10))}
+                style={{ width: 52, textAlign: 'center', background: '#060f20', border: `1px solid ${C.borderBlue}`, color: C.text, borderRadius: 6, padding: '5px 0', fontSize: 18, fontWeight: 700, fontFamily: font, WebkitAppearance: 'none', MozAppearance: 'textfield' }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <Btn onClick={saveFinalResult} disabled={finalResultSaving} variant={Object.keys(finalResultDraft).length > 0 ? 'primary' : 'ghost'} style={{ padding: '7px 16px', fontSize: 12 }}>
+                {finalResultSaving ? 'Saving…' : 'Save Final Result'}
+              </Btn>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 
@@ -1216,6 +1547,8 @@ export default function App() {
   const [knockoutResults, setKnockoutResults] = useState({})
   const [knockoutPicks, setKnockoutPicks] = useState({})
   const [knockoutMatchups, setKnockoutMatchups] = useState({})
+  const [finalResult, setFinalResult] = useState(null)
+  const [finalPicks, setFinalPicks] = useState({})
 
   useEffect(() => {
     fetchResults().then(setResults)
@@ -1223,6 +1556,10 @@ export default function App() {
       setKnockoutResults(resultsMap)
       setKnockoutPicks(picksMap)
       setKnockoutMatchups(matchupsMap)
+    })
+    fetchFinalData().then(({ result, picks }) => {
+      setFinalResult(result)
+      setFinalPicks(picks)
     })
   }, [])
 
@@ -1235,6 +1572,13 @@ export default function App() {
       setKnockoutResults(resultsMap)
       setKnockoutPicks(picksMap)
       setKnockoutMatchups(matchupsMap)
+    })
+  }
+
+  function handleRefreshFinal() {
+    fetchFinalData().then(({ result, picks }) => {
+      setFinalResult(result)
+      setFinalPicks(picks)
     })
   }
 
@@ -1302,6 +1646,7 @@ export default function App() {
               playerName={player}
               knockoutResults={knockoutResults}
               knockoutMatchups={knockoutMatchups}
+              finalResult={finalResult}
               onRefresh={handleRefreshKnockout}
             />
           ) : tab === 'scores' ? (
@@ -1310,6 +1655,8 @@ export default function App() {
               results={results}
               knockoutResults={knockoutResults}
               knockoutPicksAll={knockoutPicks}
+              finalPicks={finalPicks}
+              finalResult={finalResult}
             />
           ) : tab === 'picks-all' ? (
             <AllPicksTab results={results} knockoutResults={knockoutResults} />
@@ -1320,6 +1667,8 @@ export default function App() {
               knockoutResults={knockoutResults}
               knockoutMatchups={knockoutMatchups}
               onRefreshKnockout={handleRefreshKnockout}
+              finalResult={finalResult}
+              onRefreshFinal={handleRefreshFinal}
             />
           )}
         </div>
