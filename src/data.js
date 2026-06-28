@@ -36,8 +36,6 @@ export const LOCKED_IDS = ['A1', 'A2', 'B1']
 export const POINTS = {
   GROUP_CORRECT: 3,
   GROUP_EXACT_BONUS: 2,
-  KNOCKOUT_CORRECT: 5,
-  KNOCKOUT_EXACT_BONUS: 2,
 }
 
 export function scoreGroupPick(pick, result) {
@@ -200,18 +198,22 @@ export function scoreFinalPick(pick, result) {
 }
 
 export const POINTS_KNOCKOUT = {
-  CORRECT: 5,
-  EXACT_BONUS: 2,
+  WINNER: 4,
+  EXACT_SCORE: 3,
 }
 
 export function scoreKnockoutPick(pick, result) {
   if (!pick || !result) return 0
-  // winner: whoever has more goals (or away on penalties if tied - treat as away win)
-  const pickWinner = pick.home > pick.away ? 'home' : 'away'
-  const realWinner = result.home > result.away ? 'home' : 'away'
-  if (pickWinner !== realWinner) return 0
-  const exact = pick.home === result.home && pick.away === result.away
-  return POINTS_KNOCKOUT.CORRECT + (exact ? POINTS_KNOCKOUT.EXACT_BONUS : 0)
+  let total = 0
+  if (pick.winner && result.winner && pick.winner === result.winner) {
+    total += POINTS_KNOCKOUT.WINNER
+  }
+  if (pick.home != null && pick.away != null &&
+      result.home != null && result.away != null &&
+      pick.home === result.home && pick.away === result.away) {
+    total += POINTS_KNOCKOUT.EXACT_SCORE
+  }
+  return total
 }
 
 export function calcKnockoutTotal(knockoutPicks, knockoutResults) {
