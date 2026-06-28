@@ -1,8 +1,14 @@
+// SUPABASE TABLES REQUIRED FOR KNOCKOUT STAGE:
+// knockout_matchups: match_id TEXT PRIMARY KEY, home TEXT, away TEXT, updated_at TIMESTAMPTZ DEFAULT NOW()
+// knockout_picks: player_name TEXT, match_id TEXT, home INT, away INT, updated_at TIMESTAMPTZ DEFAULT NOW(), PRIMARY KEY (player_name, match_id)
+// knockout_results: match_id TEXT PRIMARY KEY, home INT, away INT, updated_at TIMESTAMPTZ DEFAULT NOW()
+
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from './supabase'
 import {
   GROUPS, getGroupMatches, ALL_MATCHES,
-  LOCKED_IDS, POINTS, scoreGroupPick, calcTotal, MATCH_TIMES
+  LOCKED_IDS, POINTS, scoreGroupPick, calcTotal, MATCH_TIMES,
+  KNOCKOUT_SCHEDULE, KNOCKOUT_ROUNDS, POINTS_KNOCKOUT, scoreKnockoutPick, calcKnockoutTotal,
 } from './data'
 import { generateBracketPDF } from './generatePDF'
 
@@ -35,6 +41,24 @@ async function fetchResults() {
   const map = {}
   ;(data || []).forEach(r => { map[r.match_id] = { home: r.home, away: r.away } })
   return map
+}
+
+async function fetchKnockoutData() {
+  const [{ data: results }, { data: picks }, { data: matchups }] = await Promise.all([
+    supabase.from('knockout_results').select('match_id, home, away'),
+    supabase.from('knockout_picks').select('player_name, match_id, home, away'),
+    supabase.from('knockout_matchups').select('match_id, home, away'),
+  ])
+  const resultsMap = {}
+  ;(results || []).forEach(r => { resultsMap[r.match_id] = { home: r.home, away: r.away } })
+  const picksMap = {}
+  ;(picks || []).forEach(r => {
+    if (!picksMap[r.player_name]) picksMap[r.player_name] = {}
+    picksMap[r.player_name][r.match_id] = { home: r.home, away: r.away }
+  })
+  const matchupsMap = {}
+  ;(matchups || []).forEach(r => { matchupsMap[r.match_id] = { home: r.home, away: r.away } })
+  return { resultsMap, picksMap, matchupsMap }
 }
 
 // ── SMALL COMPONENTS ───────────────────────────────────────────────────────
@@ -233,7 +257,7 @@ function MatchCard({ match, pick, onPick, results }) {
 
 // ── SCOREBOARD ─────────────────────────────────────────────────────────────
 
-function Scoreboard({ currentPlayer, results }) {
+function Scoreboard({ currentPlayer, results, knockoutResults, knockoutPicksAll }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
 
@@ -248,7 +272,7 @@ function Scoreboard({ currentPlayer, results }) {
           .eq('player_name', name)
         const pickMap = {}
         ;(data || []).forEach(r => { pickMap[r.match_id] = { home: r.home, away: r.away } })
-        return { name, pts: calcTotal(pickMap, results) }
+        return { name, pts: calcTotal(pickMap, results, knockoutPicksAll?.[name] || {}, knockoutResults) }
       }))
       scored.sort((a, b) => b.pts - a.pts)
       setRows(scored)
@@ -480,9 +504,10 @@ function PicksTab({ playerName, results }) {
 
 // ── ALL PICKS TAB ──────────────────────────────────────────────────────────
 
-function AllPicksTab({ results }) {
+function AllPicksTab({ results, knockoutResults }) {
   const [allPlayers, setAllPlayers] = useState([])
   const [allPicks, setAllPicks] = useState({})
+  const [allKnockoutPicks, setAllKnockoutPicks] = useState({})
   const [picksLoading, setPicksLoading] = useState(true)
 
   const groupKeys = Object.keys(GROUPS)
@@ -494,15 +519,24 @@ function AllPicksTab({ results }) {
       const { data: players } = await supabase.from('players').select('name').order('name')
       if (cancelled || !players) { setPicksLoading(false); return }
       const names = players.map(p => p.name)
-      const { data: picksData } = await supabase.from('picks').select('player_name, match_id, home, away')
+      const [{ data: picksData }, { data: knockoutPicksData }] = await Promise.all([
+        supabase.from('picks').select('player_name, match_id, home, away'),
+        supabase.from('knockout_picks').select('player_name, match_id, home, away'),
+      ])
       if (cancelled) return
       const map = {}
       names.forEach(n => { map[n] = {} })
       ;(picksData || []).forEach(r => {
         if (map[r.player_name]) map[r.player_name][r.match_id] = { home: r.home, away: r.away }
       })
+      const knockoutMap = {}
+      names.forEach(n => { knockoutMap[n] = {} })
+      ;(knockoutPicksData || []).forEach(r => {
+        if (knockoutMap[r.player_name]) knockoutMap[r.player_name][r.match_id] = { home: r.home, away: r.away }
+      })
       setAllPlayers(names)
       setAllPicks(map)
+      setAllKnockoutPicks(knockoutMap)
       setPicksLoading(false)
     }
     loadAllPicks()
@@ -510,6 +544,18 @@ function AllPicksTab({ results }) {
   }, [])
 
   const sn = t => t.split(' ').slice(1).join(' ')
+
+  const playerTh = (p) => (
+    <th key={p} style={{
+      padding: '8px 8px', textAlign: 'center',
+      fontWeight: 700, fontSize: 11, color: C.blueLight,
+      borderBottom: `1px solid ${C.border}`,
+      borderRight: `1px solid ${C.border}`,
+      whiteSpace: 'nowrap', minWidth: 64,
+    }}>
+      {p.length > 8 ? p.slice(0, 7) + '…' : p}
+    </th>
+  )
 
   return (
     <div>
@@ -519,157 +565,413 @@ function AllPicksTab({ results }) {
       {picksLoading ? (
         <p style={{ color: C.textMuted, fontSize: 13 }}>Loading picks…</p>
       ) : (
-        <div style={{ overflowX: 'auto', borderRadius: 8, border: `1px solid ${C.border}` }}>
-          <table style={{ borderCollapse: 'collapse', fontSize: 12, width: '100%' }}>
-            <thead>
-              <tr style={{ background: C.surfaceHi }}>
-                <th style={{
-                  position: 'sticky', left: 0, zIndex: 1,
-                  background: C.surfaceHi, padding: '8px 10px',
-                  textAlign: 'left', fontWeight: 800, fontSize: 10,
-                  color: C.textMuted, letterSpacing: 1,
-                  borderBottom: `1px solid ${C.border}`,
-                  borderRight: `1px solid ${C.border}`,
-                  whiteSpace: 'nowrap', minWidth: 140,
-                }}>
-                  MATCH
-                </th>
-                {allPlayers.map(p => (
-                  <th key={p} style={{
-                    padding: '8px 8px', textAlign: 'center',
-                    fontWeight: 700, fontSize: 11, color: C.blueLight,
+        <>
+          <div style={{ overflowX: 'auto', borderRadius: 8, border: `1px solid ${C.border}` }}>
+            <table style={{ borderCollapse: 'collapse', fontSize: 12, width: '100%' }}>
+              <thead>
+                <tr style={{ background: C.surfaceHi }}>
+                  <th style={{
+                    position: 'sticky', left: 0, zIndex: 1,
+                    background: C.surfaceHi, padding: '8px 10px',
+                    textAlign: 'left', fontWeight: 800, fontSize: 10,
+                    color: C.textMuted, letterSpacing: 1,
                     borderBottom: `1px solid ${C.border}`,
                     borderRight: `1px solid ${C.border}`,
-                    whiteSpace: 'nowrap', minWidth: 64,
+                    whiteSpace: 'nowrap', minWidth: 140,
                   }}>
-                    {p.length > 8 ? p.slice(0, 7) + '…' : p}
+                    MATCH
                   </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {groupKeys.map(g => {
-                const matches = getGroupMatches(g).filter(m => !LOCKED_IDS.includes(m.id))
-                if (matches.length === 0) return null
-                return [
-                  <tr key={`hdr-${g}`} style={{ background: 'rgba(21,101,192,0.12)' }}>
-                    <td
-                      colSpan={1 + allPlayers.length}
-                      style={{
-                        padding: '5px 10px', fontSize: 10, fontWeight: 800,
-                        color: C.blueLight, letterSpacing: 2,
-                        borderBottom: `1px solid ${C.border}`,
-                      }}
-                    >
-                      GROUP {g}
-                    </td>
-                  </tr>,
-                  ...matches.map((m, mi) => (
-                    <tr key={m.id} style={{ background: mi % 2 === 0 ? C.surface : C.surfaceHi }}>
-                      <td style={{
-                        position: 'sticky', left: 0, zIndex: 1,
-                        background: mi % 2 === 0 ? C.surface : C.surfaceHi,
-                        padding: '7px 10px',
-                        borderBottom: `1px solid ${C.border}`,
-                        borderRight: `1px solid ${C.border}`,
-                        whiteSpace: 'nowrap',
-                      }}>
-                        <span style={{ fontWeight: 800, color: C.textMuted, fontSize: 10, marginRight: 6 }}>
-                          {m.id}
-                        </span>
-                        <span style={{ color: C.text, fontSize: 11 }}>
-                          {sn(m.home)} · {sn(m.away)}
-                        </span>
-                        {results[m.id] && (
-                          <span style={{ color: C.green, fontSize: 10, marginLeft: 4 }}>
-                            ({results[m.id].home}–{results[m.id].away})
-                          </span>
-                        )}
+                  {allPlayers.map(playerTh)}
+                </tr>
+              </thead>
+              <tbody>
+                {groupKeys.map(g => {
+                  const matches = getGroupMatches(g).filter(m => !LOCKED_IDS.includes(m.id))
+                  if (matches.length === 0) return null
+                  return [
+                    <tr key={`hdr-${g}`} style={{ background: 'rgba(21,101,192,0.12)' }}>
+                      <td
+                        colSpan={1 + allPlayers.length}
+                        style={{
+                          padding: '5px 10px', fontSize: 10, fontWeight: 800,
+                          color: C.blueLight, letterSpacing: 2,
+                          borderBottom: `1px solid ${C.border}`,
+                        }}
+                      >
+                        GROUP {g}
                       </td>
-                      {allPlayers.map(p => {
-                        const pick = allPicks[p]?.[m.id]
-                        const hasPick = pick?.home != null && pick?.away != null
-                        const result = results[m.id]
-                        const pts = (hasPick && result) ? scoreGroupPick(pick, result) : null
-                        return (
-                          <td key={p} style={{
-                            padding: '7px 8px', textAlign: 'center',
+                    </tr>,
+                    ...matches.map((m, mi) => (
+                      <tr key={m.id} style={{ background: mi % 2 === 0 ? C.surface : C.surfaceHi }}>
+                        <td style={{
+                          position: 'sticky', left: 0, zIndex: 1,
+                          background: mi % 2 === 0 ? C.surface : C.surfaceHi,
+                          padding: '7px 10px',
+                          borderBottom: `1px solid ${C.border}`,
+                          borderRight: `1px solid ${C.border}`,
+                          whiteSpace: 'nowrap',
+                        }}>
+                          <span style={{ fontWeight: 800, color: C.textMuted, fontSize: 10, marginRight: 6 }}>
+                            {m.id}
+                          </span>
+                          <span style={{ color: C.text, fontSize: 11 }}>
+                            {sn(m.home)} · {sn(m.away)}
+                          </span>
+                          {results[m.id] && (
+                            <span style={{ color: C.green, fontSize: 10, marginLeft: 4 }}>
+                              ({results[m.id].home}–{results[m.id].away})
+                            </span>
+                          )}
+                        </td>
+                        {allPlayers.map(p => {
+                          const pick = allPicks[p]?.[m.id]
+                          const hasPick = pick?.home != null && pick?.away != null
+                          const result = results[m.id]
+                          const pts = (hasPick && result) ? scoreGroupPick(pick, result) : null
+                          return (
+                            <td key={p} style={{
+                              padding: '7px 8px', textAlign: 'center',
+                              borderBottom: `1px solid ${C.border}`,
+                              borderRight: `1px solid ${C.border}`,
+                              color: hasPick ? C.text : C.textDim,
+                              fontWeight: hasPick ? 700 : 400,
+                              fontSize: 12, whiteSpace: 'nowrap',
+                            }}>
+                              {hasPick ? `${pick.home} – ${pick.away}` : '–'}
+                              {pts !== null && (
+                                <span style={{
+                                  display: 'inline-block', marginLeft: 4,
+                                  padding: '1px 4px', borderRadius: 99,
+                                  fontSize: 9, fontWeight: 800,
+                                  background: pts === 5 ? C.green : pts > 0 ? C.amber : C.red,
+                                  color: pts === 5 ? C.greenDark : pts > 0 ? '#1a1000' : '#fff',
+                                }}>
+                                  {pts}
+                                </span>
+                              )}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    )),
+                  ]
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Knockout picks */}
+          <div style={{ marginTop: 32 }}>
+            <div style={{ fontSize: 11, letterSpacing: 2, color: C.textMuted, fontWeight: 800, marginBottom: 12 }}>
+              🏆 KNOCKOUT PICKS
+            </div>
+            <div style={{ overflowX: 'auto', borderRadius: 8, border: `1px solid ${C.border}` }}>
+              <table style={{ borderCollapse: 'collapse', fontSize: 12, width: '100%' }}>
+                <thead>
+                  <tr style={{ background: C.surfaceHi }}>
+                    <th style={{
+                      position: 'sticky', left: 0, zIndex: 1,
+                      background: C.surfaceHi, padding: '8px 10px',
+                      textAlign: 'left', fontWeight: 800, fontSize: 10,
+                      color: C.textMuted, letterSpacing: 1,
+                      borderBottom: `1px solid ${C.border}`,
+                      borderRight: `1px solid ${C.border}`,
+                      whiteSpace: 'nowrap', minWidth: 160,
+                    }}>
+                      MATCH
+                    </th>
+                    {allPlayers.map(playerTh)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {KNOCKOUT_ROUNDS.map(round => {
+                    const matchesInRound = Object.entries(KNOCKOUT_SCHEDULE).filter(([, m]) => m.label === round)
+                    return [
+                      <tr key={`ko-hdr-${round}`} style={{ background: 'rgba(21,101,192,0.12)' }}>
+                        <td
+                          colSpan={1 + allPlayers.length}
+                          style={{
+                            padding: '5px 10px', fontSize: 10, fontWeight: 800,
+                            color: C.blueLight, letterSpacing: 2,
                             borderBottom: `1px solid ${C.border}`,
-                            borderRight: `1px solid ${C.border}`,
-                            color: hasPick ? C.text : C.textDim,
-                            fontWeight: hasPick ? 700 : 400,
-                            fontSize: 12, whiteSpace: 'nowrap',
-                          }}>
-                            {hasPick ? `${pick.home} – ${pick.away}` : '–'}
-                            {pts !== null && (
-                              <span style={{
-                                display: 'inline-block', marginLeft: 4,
-                                padding: '1px 4px', borderRadius: 99,
-                                fontSize: 9, fontWeight: 800,
-                                background: pts === 5 ? C.green : pts > 0 ? C.amber : C.red,
-                                color: pts === 5 ? C.greenDark : pts > 0 ? '#1a1000' : '#fff',
-                              }}>
-                                {pts}
+                          }}
+                        >
+                          {round.toUpperCase()}
+                        </td>
+                      </tr>,
+                      ...matchesInRound.map(([matchId, schedule], mi) => {
+                        const result = knockoutResults[matchId]
+                        return (
+                          <tr key={matchId} style={{ background: mi % 2 === 0 ? C.surface : C.surfaceHi }}>
+                            <td style={{
+                              position: 'sticky', left: 0, zIndex: 1,
+                              background: mi % 2 === 0 ? C.surface : C.surfaceHi,
+                              padding: '7px 10px',
+                              borderBottom: `1px solid ${C.border}`,
+                              borderRight: `1px solid ${C.border}`,
+                              whiteSpace: 'nowrap',
+                            }}>
+                              <span style={{ fontWeight: 800, color: C.textMuted, fontSize: 10, marginRight: 6 }}>
+                                {matchId}
                               </span>
-                            )}
-                          </td>
+                              <span style={{ color: C.text, fontSize: 11 }}>
+                                {schedule.home} · {schedule.away}
+                              </span>
+                              {result && (
+                                <span style={{ color: C.green, fontSize: 10, marginLeft: 4 }}>
+                                  ({result.home}–{result.away})
+                                </span>
+                              )}
+                            </td>
+                            {allPlayers.map(p => {
+                              const pick = allKnockoutPicks[p]?.[matchId]
+                              const hasPick = pick?.home != null && pick?.away != null
+                              const pts = (hasPick && result) ? scoreKnockoutPick(pick, result) : null
+                              return (
+                                <td key={p} style={{
+                                  padding: '7px 8px', textAlign: 'center',
+                                  borderBottom: `1px solid ${C.border}`,
+                                  borderRight: `1px solid ${C.border}`,
+                                  color: hasPick ? C.text : C.textDim,
+                                  fontWeight: hasPick ? 700 : 400,
+                                  fontSize: 12, whiteSpace: 'nowrap',
+                                }}>
+                                  {hasPick ? `${pick.home} – ${pick.away}` : '–'}
+                                  {pts !== null && (
+                                    <span style={{
+                                      display: 'inline-block', marginLeft: 4,
+                                      padding: '1px 4px', borderRadius: 99,
+                                      fontSize: 9, fontWeight: 800,
+                                      background: pts === 7 ? C.green : pts > 0 ? C.amber : C.red,
+                                      color: pts === 7 ? C.greenDark : pts > 0 ? '#1a1000' : '#fff',
+                                    }}>
+                                      {pts}
+                                    </span>
+                                  )}
+                                </td>
+                              )
+                            })}
+                          </tr>
                         )
-                      })}
-                    </tr>
-                  )),
-                ]
-              })}
-            </tbody>
-          </table>
-        </div>
+                      }),
+                    ]
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
       )}
+    </div>
+  )
+}
+
+// ── KNOCKOUT TAB ───────────────────────────────────────────────────────────
+
+function KnockoutTab({ playerName, knockoutResults, knockoutMatchups, onRefresh }) {
+  const [picks, setPicks] = useState({})
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    async function loadPicks() {
+      const { data } = await supabase
+        .from('knockout_picks')
+        .select('match_id, home, away')
+        .eq('player_name', playerName)
+      if (data) {
+        const map = {}
+        data.forEach(r => { map[r.match_id] = { home: r.home, away: r.away } })
+        setPicks(map)
+      }
+    }
+    loadPicks()
+  }, [playerName])
+
+  const savePick = useCallback(async (matchId, score) => {
+    setSaving(true)
+    await supabase.from('knockout_picks').upsert({
+      player_name: playerName,
+      match_id: matchId,
+      home: score.home,
+      away: score.away,
+    }, { onConflict: 'player_name,match_id' })
+    setSaving(false)
+  }, [playerName])
+
+  function handlePick(matchId, score) {
+    setPicks(prev => ({ ...prev, [matchId]: score }))
+    savePick(matchId, score)
+  }
+
+  function formatKOTime(isoStr) {
+    return new Date(isoStr).toLocaleString('en-US', {
+      timeZone: 'America/Los_Angeles',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    }) + ' PT'
+  }
+
+  return (
+    <div>
+      <div style={{ fontSize: 11, letterSpacing: 2, color: C.textMuted, fontWeight: 800, marginBottom: 16 }}>
+        🏆 KNOCKOUT STAGE
+        {saving && <span style={{ color: C.textDim, marginLeft: 8, fontWeight: 400, fontSize: 10 }}>saving…</span>}
+      </div>
+
+      {KNOCKOUT_ROUNDS.map(round => {
+        const matchesInRound = Object.entries(KNOCKOUT_SCHEDULE).filter(([, m]) => m.label === round)
+        if (matchesInRound.length === 0) return null
+        return (
+          <div key={round}>
+            <div style={{
+              fontSize: 10, fontWeight: 800, letterSpacing: 2,
+              color: C.blueLight, padding: '8px 0 6px',
+              borderBottom: `1px solid ${C.border}`, marginBottom: 8, marginTop: 16,
+            }}>
+              {round.toUpperCase()}
+            </div>
+            {matchesInRound.map(([matchId, schedule]) => {
+              const matchup = knockoutMatchups[matchId]
+              const home = matchup?.home || schedule.home
+              const away = matchup?.away || schedule.away
+              const isTBD = home === 'TBD' && away === 'TBD'
+              const result = knockoutResults[matchId]
+              const pick = picks[matchId]
+              const h = pick?.home
+              const a = pick?.away
+              const hasPick = h != null && a != null
+              const pts = (hasPick && result) ? scoreKnockoutPick(pick, result) : null
+
+              return (
+                <div key={matchId} style={{
+                  background: isTBD ? 'rgba(255,255,255,0.01)' : 'rgba(255,255,255,0.025)',
+                  border: `1px solid ${isTBD ? C.textDim : C.border}`,
+                  borderRadius: 10, padding: '10px 12px', marginBottom: 8,
+                  opacity: isTBD ? 0.5 : 1,
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <div style={{ fontSize: 9, color: isTBD ? C.textDim : C.gold }}>
+                      {formatKOTime(schedule.time)} · {schedule.venue}
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      {result && <span style={{ fontSize: 10, color: C.green }}>RESULT: {result.home}–{result.away}</span>}
+                      {pts !== null && <PtsBadge pts={pts} maxPts={POINTS_KNOCKOUT.CORRECT + POINTS_KNOCKOUT.EXACT_BONUS} />}
+                    </div>
+                  </div>
+
+                  {isTBD ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ flex: 1, fontSize: 13, color: C.textDim }}>TBD</span>
+                      <span style={{ fontSize: 11, color: C.textDim, fontStyle: 'italic' }}>Matchup TBD</span>
+                      <span style={{ flex: 1, fontSize: 13, color: C.textDim, textAlign: 'right' }}>TBD</span>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ flex: 1, fontSize: 13, color: result ? C.textMuted : C.text, lineHeight: 1.3 }}>
+                        {home}
+                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                        <ScoreInput value={h} onChange={v => handlePick(matchId, { home: v, away: a ?? null })} disabled={!!result} />
+                        <span style={{ color: C.gold, fontWeight: 700, fontSize: 14 }}>–</span>
+                        <ScoreInput value={a} onChange={v => handlePick(matchId, { home: h ?? null, away: v })} disabled={!!result} />
+                      </div>
+                      <span style={{ flex: 1, fontSize: 13, color: result ? C.textMuted : C.text, textAlign: 'right', lineHeight: 1.3 }}>
+                        {away}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )
+      })}
     </div>
   )
 }
 
 // ── ADMIN PANEL ────────────────────────────────────────────────────────────
 
-function AdminPanel({ results, onRefresh }) {
+function AdminPanel({ results, onRefresh, knockoutResults, knockoutMatchups, onRefreshKnockout }) {
   const [pin, setPin] = useState('')
   const [unlocked, setUnlocked] = useState(false)
   const [pinErr, setPinErr] = useState('')
 
-  // Results entry state
+  // Group results state
   const [activeGroup, setActiveGroup] = useState('A')
   const [draft, setDraft] = useState({})
   const [saving, setSaving] = useState({})
 
+  // Admin view toggle
+  const [adminView, setAdminView] = useState('group')
+  const [knockoutSubTab, setKnockoutSubTab] = useState('matchups')
+
+  // Knockout state
+  const [matchupDraft, setMatchupDraft] = useState({})
+  const [resultDraft, setResultDraft] = useState({})
+  const [knockoutSaving, setKnockoutSaving] = useState({})
+
   const groupKeys = Object.keys(GROUPS)
 
   function handleUnlock() {
-    if (pin === 'wc2026') {
-      setUnlocked(true)
-      setPinErr('')
-    } else {
-      setPinErr('Incorrect PIN')
-    }
+    if (pin === 'wc2026') { setUnlocked(true); setPinErr('') }
+    else setPinErr('Incorrect PIN')
   }
 
   function getScore(matchId, side) {
     if (draft[matchId]?.[side] !== undefined) return draft[matchId][side]
     return results[matchId]?.[side] ?? null
   }
-
   function setScore(matchId, side, val) {
     setDraft(prev => ({ ...prev, [matchId]: { ...prev[matchId], [side]: val } }))
   }
-
   async function saveMatch(matchId) {
     const home = getScore(matchId, 'home')
     const away = getScore(matchId, 'away')
     if (home == null || away == null) return
     setSaving(prev => ({ ...prev, [matchId]: true }))
-    await supabase.from('results').upsert(
-      { match_id: matchId, home, away },
-      { onConflict: 'match_id' }
-    )
+    await supabase.from('results').upsert({ match_id: matchId, home, away }, { onConflict: 'match_id' })
     setDraft(prev => { const next = { ...prev }; delete next[matchId]; return next })
     setSaving(prev => ({ ...prev, [matchId]: false }))
+    onRefresh()
+  }
+
+  function getMatchupVal(matchId, side) {
+    if (matchupDraft[matchId]?.[side] !== undefined) return matchupDraft[matchId][side]
+    return knockoutMatchups[matchId]?.[side] || ''
+  }
+  function setMatchupVal(matchId, side, val) {
+    setMatchupDraft(prev => ({ ...prev, [matchId]: { ...prev[matchId], [side]: val } }))
+  }
+  async function saveMatchup(matchId) {
+    const home = getMatchupVal(matchId, 'home')
+    const away = getMatchupVal(matchId, 'away')
+    if (!home || !away) return
+    setKnockoutSaving(prev => ({ ...prev, [matchId]: true }))
+    await supabase.from('knockout_matchups').upsert({ match_id: matchId, home, away }, { onConflict: 'match_id' })
+    setMatchupDraft(prev => { const next = { ...prev }; delete next[matchId]; return next })
+    setKnockoutSaving(prev => ({ ...prev, [matchId]: false }))
+    onRefreshKnockout()
+  }
+
+  function getKnockoutScore(matchId, side) {
+    if (resultDraft[matchId]?.[side] !== undefined) return resultDraft[matchId][side]
+    return knockoutResults[matchId]?.[side] ?? null
+  }
+  function setKnockoutScore(matchId, side, val) {
+    setResultDraft(prev => ({ ...prev, [matchId]: { ...prev[matchId], [side]: val } }))
+  }
+  async function saveKnockoutResult(matchId) {
+    const home = getKnockoutScore(matchId, 'home')
+    const away = getKnockoutScore(matchId, 'away')
+    if (home == null || away == null) return
+    setKnockoutSaving(prev => ({ ...prev, [matchId]: true }))
+    await supabase.from('knockout_results').upsert({ match_id: matchId, home, away }, { onConflict: 'match_id' })
+    setResultDraft(prev => { const next = { ...prev }; delete next[matchId]; return next })
+    setKnockoutSaving(prev => ({ ...prev, [matchId]: false }))
+    onRefreshKnockout()
     onRefresh()
   }
 
@@ -707,52 +1009,46 @@ function AdminPanel({ results, onRefresh }) {
     )
   }
 
-  // Results entry view
+  const toggleBtn = (active) => ({
+    flex: 1, padding: '10px 0', border: 'none', cursor: 'pointer', borderRadius: 8,
+    background: active ? C.blue : C.surface,
+    color: active ? '#fff' : C.textMuted,
+    fontWeight: active ? 800 : 500, fontSize: 13, fontFamily: font,
+  })
+
+  // ── Group results view ──
   const groupMatches = getGroupMatches(activeGroup)
-  return (
+  const groupView = (
     <div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 20 }}>
         {groupKeys.map(g => {
           const ms = getGroupMatches(g)
-          const done = ms.filter(m => results[m.id] != null).length
-          const allDone = done === ms.length
+          const allDone = ms.filter(m => results[m.id] != null).length === ms.length
           return (
             <button key={g} onClick={() => setActiveGroup(g)} style={{
               padding: '6px 12px', borderRadius: 8, border: 'none',
               cursor: 'pointer', fontWeight: 800, fontSize: 13,
-              background: activeGroup === g
-                ? C.blue
-                : allDone ? 'rgba(0,230,118,0.12)' : C.surface,
+              background: activeGroup === g ? C.blue : allDone ? 'rgba(0,230,118,0.12)' : C.surface,
               color: activeGroup === g ? '#fff' : allDone ? C.green : C.textMuted,
               outline: activeGroup === g ? `2px solid ${C.blueBright}` : 'none',
               outlineOffset: 1, fontFamily: font, position: 'relative',
             }}>
               {g}
               {allDone && activeGroup !== g && (
-                <span style={{
-                  position: 'absolute', top: -3, right: -3,
-                  width: 8, height: 8, borderRadius: 99,
-                  background: C.green, border: `1px solid ${C.bg}`,
-                }} />
+                <span style={{ position: 'absolute', top: -3, right: -3, width: 8, height: 8, borderRadius: 99, background: C.green, border: `1px solid ${C.bg}` }} />
               )}
             </button>
           )
         })}
       </div>
-
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-        <span style={{
-          background: `linear-gradient(135deg, ${C.blue}, #0d47a1)`,
-          color: C.blueLight, fontWeight: 900, fontSize: 12,
-          padding: '4px 10px', borderRadius: 6, letterSpacing: 2,
-        }}>
+        <span style={{ background: `linear-gradient(135deg, ${C.blue}, #0d47a1)`, color: C.blueLight, fontWeight: 900, fontSize: 12, padding: '4px 10px', borderRadius: 6, letterSpacing: 2 }}>
           GROUP {activeGroup}
         </span>
         <span style={{ fontSize: 12, color: C.textMuted }}>
           {GROUPS[activeGroup].map(t => t.split(' ').slice(1).join(' ')).join(' · ')}
         </span>
       </div>
-
       {groupMatches.map(m => {
         const home = getScore(m.id, 'home')
         const away = getScore(m.id, 'away')
@@ -766,9 +1062,7 @@ function AdminPanel({ results, onRefresh }) {
             borderRadius: 10, padding: '10px 12px', marginBottom: 8,
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <span style={{ fontSize: 10, color: C.textMuted, fontWeight: 800, letterSpacing: 1 }}>
-                {m.id} · MD{m.md}
-              </span>
+              <span style={{ fontSize: 10, color: C.textMuted, fontWeight: 800, letterSpacing: 1 }}>{m.id} · MD{m.md}</span>
               {hasSaved && <span style={{ fontSize: 10, color: C.green, fontWeight: 700 }}>SAVED ✓</span>}
               {isDirty && <span style={{ fontSize: 10, color: C.amber, fontWeight: 700 }}>UNSAVED</span>}
             </div>
@@ -782,18 +1076,133 @@ function AdminPanel({ results, onRefresh }) {
               <span style={{ flex: 1, fontSize: 13, color: C.text, textAlign: 'right', lineHeight: 1.3 }}>{m.away}</span>
             </div>
             <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
-              <Btn
-                onClick={() => saveMatch(m.id)}
-                disabled={isSaving || (home == null || away == null)}
-                variant={isDirty ? 'primary' : 'ghost'}
-                style={{ padding: '7px 16px', fontSize: 12 }}
-              >
+              <Btn onClick={() => saveMatch(m.id)} disabled={isSaving || (home == null || away == null)} variant={isDirty ? 'primary' : 'ghost'} style={{ padding: '7px 16px', fontSize: 12 }}>
                 {isSaving ? 'Saving…' : 'Save Result'}
               </Btn>
             </div>
           </div>
         )
       })}
+    </div>
+  )
+
+  // ── Knockout admin view ──
+  const knockoutView = (
+    <div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+        <button style={toggleBtn(knockoutSubTab === 'matchups')} onClick={() => setKnockoutSubTab('matchups')}>Set Matchups</button>
+        <button style={toggleBtn(knockoutSubTab === 'results')} onClick={() => setKnockoutSubTab('results')}>Enter Results</button>
+      </div>
+
+      {knockoutSubTab === 'matchups' && KNOCKOUT_ROUNDS.map(round => {
+        const matchesInRound = Object.entries(KNOCKOUT_SCHEDULE).filter(([, m]) => m.label === round)
+        const hasTBD = matchesInRound.some(([matchId]) => {
+          const m = knockoutMatchups[matchId]
+          return !m || !m.home || !m.away || m.home === 'TBD' || m.away === 'TBD'
+        })
+        if (!hasTBD) return null
+        return (
+          <div key={round}>
+            <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 2, color: C.blueLight, padding: '8px 0 6px', borderBottom: `1px solid ${C.border}`, marginBottom: 8, marginTop: 8 }}>
+              {round.toUpperCase()}
+            </div>
+            {matchesInRound.map(([matchId]) => {
+              const homeVal = getMatchupVal(matchId, 'home')
+              const awayVal = getMatchupVal(matchId, 'away')
+              const isDirty = matchupDraft[matchId] !== undefined
+              const isSaving = knockoutSaving[matchId]
+              const ex = knockoutMatchups[matchId]
+              const hasSaved = ex?.home && ex?.away && ex.home !== 'TBD' && ex.away !== 'TBD' && !isDirty
+              return (
+                <div key={matchId} style={{
+                  background: hasSaved ? 'rgba(0,230,118,0.04)' : 'rgba(255,255,255,0.025)',
+                  border: `1px solid ${hasSaved ? 'rgba(0,230,118,0.2)' : isDirty ? C.borderBlue : C.border}`,
+                  borderRadius: 10, padding: '10px 12px', marginBottom: 8,
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <span style={{ fontSize: 10, color: C.textMuted, fontWeight: 800, letterSpacing: 1 }}>{matchId}</span>
+                    {hasSaved && <span style={{ fontSize: 10, color: C.green, fontWeight: 700 }}>SET ✓</span>}
+                    {isDirty && <span style={{ fontSize: 10, color: C.amber, fontWeight: 700 }}>UNSAVED</span>}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <input type="text" value={homeVal} onChange={e => setMatchupVal(matchId, 'home', e.target.value)} placeholder="Home team"
+                      style={{ flex: 1, padding: '8px 10px', background: '#060f20', border: `1px solid ${C.borderBlue}`, borderRadius: 6, color: C.text, fontSize: 13, fontFamily: font }} />
+                    <span style={{ color: C.textDim, fontWeight: 700 }}>vs</span>
+                    <input type="text" value={awayVal} onChange={e => setMatchupVal(matchId, 'away', e.target.value)} placeholder="Away team"
+                      style={{ flex: 1, padding: '8px 10px', background: '#060f20', border: `1px solid ${C.borderBlue}`, borderRadius: 6, color: C.text, fontSize: 13, fontFamily: font }} />
+                  </div>
+                  <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
+                    <Btn onClick={() => saveMatchup(matchId)} disabled={isSaving || !homeVal || !awayVal} variant={isDirty ? 'primary' : 'ghost'} style={{ padding: '7px 16px', fontSize: 12 }}>
+                      {isSaving ? 'Saving…' : 'Save Matchup'}
+                    </Btn>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )
+      })}
+
+      {knockoutSubTab === 'results' && KNOCKOUT_ROUNDS.map(round => {
+        const matchesInRound = Object.entries(KNOCKOUT_SCHEDULE).filter(([, m]) => m.label === round)
+        const fullySet = matchesInRound.every(([matchId]) => {
+          const m = knockoutMatchups[matchId]
+          return m?.home && m?.away && m.home !== 'TBD' && m.away !== 'TBD'
+        })
+        if (!fullySet) return null
+        return (
+          <div key={round}>
+            <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 2, color: C.blueLight, padding: '8px 0 6px', borderBottom: `1px solid ${C.border}`, marginBottom: 8, marginTop: 8 }}>
+              {round.toUpperCase()}
+            </div>
+            {matchesInRound.map(([matchId]) => {
+              const matchup = knockoutMatchups[matchId]
+              const home = getKnockoutScore(matchId, 'home')
+              const away = getKnockoutScore(matchId, 'away')
+              const isDirty = resultDraft[matchId] !== undefined
+              const isSaving = knockoutSaving[matchId]
+              const hasSaved = knockoutResults[matchId] != null && !isDirty
+              return (
+                <div key={matchId} style={{
+                  background: hasSaved ? 'rgba(0,230,118,0.04)' : 'rgba(255,255,255,0.025)',
+                  border: `1px solid ${hasSaved ? 'rgba(0,230,118,0.2)' : isDirty ? C.borderBlue : C.border}`,
+                  borderRadius: 10, padding: '10px 12px', marginBottom: 8,
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <span style={{ fontSize: 10, color: C.textMuted, fontWeight: 800, letterSpacing: 1 }}>{matchId}</span>
+                    {hasSaved && <span style={{ fontSize: 10, color: C.green, fontWeight: 700 }}>SAVED ✓</span>}
+                    {isDirty && <span style={{ fontSize: 10, color: C.amber, fontWeight: 700 }}>UNSAVED</span>}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ flex: 1, fontSize: 13, color: C.text, lineHeight: 1.3 }}>{matchup?.home}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                      <ScoreInput value={home} onChange={v => setKnockoutScore(matchId, 'home', v)} />
+                      <span style={{ color: C.textDim, fontWeight: 700, fontSize: 14 }}>–</span>
+                      <ScoreInput value={away} onChange={v => setKnockoutScore(matchId, 'away', v)} />
+                    </div>
+                    <span style={{ flex: 1, fontSize: 13, color: C.text, textAlign: 'right', lineHeight: 1.3 }}>{matchup?.away}</span>
+                  </div>
+                  <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
+                    <Btn onClick={() => saveKnockoutResult(matchId)} disabled={isSaving || (home == null || away == null)} variant={isDirty ? 'primary' : 'ghost'} style={{ padding: '7px 16px', fontSize: 12 }}>
+                      {isSaving ? 'Saving…' : 'Save Result'}
+                    </Btn>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )
+      })}
+    </div>
+  )
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+        <button style={toggleBtn(adminView === 'group')} onClick={() => setAdminView('group')}>Group Results</button>
+        <button style={toggleBtn(adminView === 'knockout')} onClick={() => setAdminView('knockout')}>Knockout</button>
+      </div>
+      {adminView === 'group' ? groupView : knockoutView}
     </div>
   )
 }
@@ -804,13 +1213,29 @@ export default function App() {
   const [player, setPlayer] = useState(() => localStorage.getItem('wc2026_player') || null)
   const [tab, setTab] = useState('picks')
   const [results, setResults] = useState({})
+  const [knockoutResults, setKnockoutResults] = useState({})
+  const [knockoutPicks, setKnockoutPicks] = useState({})
+  const [knockoutMatchups, setKnockoutMatchups] = useState({})
 
   useEffect(() => {
     fetchResults().then(setResults)
+    fetchKnockoutData().then(({ resultsMap, picksMap, matchupsMap }) => {
+      setKnockoutResults(resultsMap)
+      setKnockoutPicks(picksMap)
+      setKnockoutMatchups(matchupsMap)
+    })
   }, [])
 
   function handleRefreshResults() {
     fetchResults().then(setResults)
+  }
+
+  function handleRefreshKnockout() {
+    fetchKnockoutData().then(({ resultsMap, picksMap, matchupsMap }) => {
+      setKnockoutResults(resultsMap)
+      setKnockoutPicks(picksMap)
+      setKnockoutMatchups(matchupsMap)
+    })
   }
 
   function handleLogin(name) {
@@ -872,12 +1297,30 @@ export default function App() {
         <div style={{ maxWidth: 640, margin: '0 auto', padding: '20px 16px 80px', position: 'relative', zIndex: 1 }}>
           {tab === 'picks' ? (
             <PicksTab playerName={player} results={results} />
+          ) : tab === 'knockout' ? (
+            <KnockoutTab
+              playerName={player}
+              knockoutResults={knockoutResults}
+              knockoutMatchups={knockoutMatchups}
+              onRefresh={handleRefreshKnockout}
+            />
           ) : tab === 'scores' ? (
-            <Scoreboard currentPlayer={player} results={results} />
+            <Scoreboard
+              currentPlayer={player}
+              results={results}
+              knockoutResults={knockoutResults}
+              knockoutPicksAll={knockoutPicks}
+            />
           ) : tab === 'picks-all' ? (
-            <AllPicksTab results={results} />
+            <AllPicksTab results={results} knockoutResults={knockoutResults} />
           ) : (
-            <AdminPanel results={results} onRefresh={handleRefreshResults} />
+            <AdminPanel
+              results={results}
+              onRefresh={handleRefreshResults}
+              knockoutResults={knockoutResults}
+              knockoutMatchups={knockoutMatchups}
+              onRefreshKnockout={handleRefreshKnockout}
+            />
           )}
         </div>
       </div>
@@ -890,6 +1333,7 @@ export default function App() {
       }}>
         {[
           { id: 'picks', label: '🗳️ My Picks' },
+          { id: 'knockout', label: '🏆 Knockout' },
           { id: 'scores', label: '🏆 Scoreboard' },
           { id: 'picks-all', label: '📋 All Picks' },
           { id: 'admin', label: '⚙️ Admin' },
